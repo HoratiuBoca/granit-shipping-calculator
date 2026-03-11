@@ -6,7 +6,7 @@
  * 1. Se calculează greutatea medie per palet (total kg ÷ nr paleți)
  * 2. Se caută prețul în tabelul Raben la greutatea medie + nr paleți + zonă
  * 3. Peste 5.000 kg → se împarte în livrări separate de max 5t
- */
+ */ 
 
 // ============================================================
 // PARAMETRI EDITABILI
