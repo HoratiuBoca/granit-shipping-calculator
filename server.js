@@ -22,36 +22,43 @@ const SHOPIFY_API_KEY = process.env.SHOPIFY_API_KEY || "";
 const SHOPIFY_API_SECRET = process.env.SHOPIFY_API_SECRET || "";
 const APP_URL = process.env.APP_URL || "";
 
+// In-memory token store (persists until redeploy)
 let shopTokens = {};
 
+// HMAC verification for Shopify webhooks
 function verifyShopifyHmac(req, res, next) {
   if (!SHOPIFY_SECRET) return next();
   const hmac = req.get("X-Shopify-Hmac-Sha256");
-  if (!hmac) return next();
+  if (!hmac) return next(); // Allow requests without HMAC for testing
   const hash = crypto.createHmac("sha256", SHOPIFY_SECRET).update(JSON.stringify(req.body), "utf8").digest("base64");
   if (hash !== hmac) return res.status(401).json({ error: "Invalid HMAC" });
   next();
 }
 
+// Verify OAuth HMAC from query params
 function verifyOAuthHmac(query) {
-  if (!SHOPIFY_API_SECRET) return true;
+  if (!SHOPIFY_API_SECRET) return true; // Skip if no secret configured
   const hmac = query.hmac;
   if (!hmac) return false;
   const params = { ...query };
   delete params.hmac;
-  const sortedParams = Object.keys(params).sort().map(k => k + "=" + params[k]).join("&");
+  const sortedParams = Object.keys(params).sort().map(k => `${k}=${params[k]}`).join("&");
   const hash = crypto.createHmac("sha256", SHOPIFY_API_SECRET).update(sortedParams).digest("hex");
   return hash === hmac;
 }
 
+// Helper: make HTTPS request
 function httpsRequest(options, postData) {
   return new Promise((resolve, reject) => {
     const req = https.request(options, (res) => {
       let data = "";
       res.on("data", (chunk) => { data += chunk; });
       res.on("end", () => {
-        try { resolve({ status: res.statusCode, data: JSON.parse(data) }); }
-        catch (e) { resolve({ status: res.statusCode, data: data }); }
+        try {
+          resolve({ status: res.statusCode, data: JSON.parse(data) });
+        } catch (e) {
+          resolve({ status: res.statusCode, data: data });
+        }
       });
     });
     req.on("error", reject);
@@ -60,8 +67,10 @@ function httpsRequest(options, postData) {
   });
 }
 
+// Register Carrier Service on a shop
 async function registerCarrierService(shop, accessToken) {
-  const callbackUrl = APP_URL ? APP_URL + "/api/shipping-rates" : "https://" + (process.env.RAILWAY_PUBLIC_DOMAIN || "granit-shipping-calculator-production.up.railway.app") + "/api/shipping-rates";
+  const callbackUrl = APP_URL ? `${APP_URL}/api/shipping-rates` : `https://${process.env.RAILWAY_PUBLIC_DOMAIN || "granit-shipping-calculator-production.up.railway.app"}/api/shipping-rates`;
+
   const postData = JSON.stringify({
     carrier_service: {
       name: "Raben Logistics - Granit Online",
@@ -70,7 +79,10 @@ async function registerCarrierService(shop, accessToken) {
       format: "json"
     }
   });
-  console.log("Registering Carrier Service on " + shop + " callback: " + callbackUrl);
+
+  console.log(`📦 Registering Carrier Service on ${shop}...`);
+  console.log(`   Callback URL: ${callbackUrl}`);
+
   const result = await httpsRequest({
     hostname: shop,
     path: "/admin/api/2024-01/carrier_services.json",
@@ -81,10 +93,12 @@ async function registerCarrierService(shop, accessToken) {
       "Content-Length": Buffer.byteLength(postData)
     }
   }, postData);
-  console.log("Carrier Service response (" + result.status + "):", JSON.stringify(result.data));
+
+  console.log(`   Response (${result.status}):`, JSON.stringify(result.data));
   return result;
 }
 
+// CORS
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Headers", "Content-Type");
@@ -92,99 +106,234 @@ app.use((req, res, next) => {
   next();
 });
 
+// ============================================================
+// GET /auth/callback — Shopify OAuth callback
+// ============================================================
 app.get("/auth/callback", async (req, res) => {
   try {
     const { code, shop, hmac, timestamp } = req.query;
-    console.log("OAuth callback from " + shop);
-    if (!code || !shop) return res.status(400).send("Missing code or shop parameter");
-    if (!verifyOAuthHmac(req.query)) console.log("HMAC verification failed, continuing...");
-    const postData = JSON.stringify({ client_id: SHOPIFY_API_KEY, client_secret: SHOPIFY_API_SECRET, code: code });
-    const tokenResult = await httpsRequest({
-      hostname: shop, path: "/admin/oauth/access_token", method: "POST",
-      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(postData) }
-    }, postData);
-    console.log("Token exchange status: " + tokenResult.status);
-    if (tokenResult.status !== 200 || !tokenResult.data.access_token) {
-      console.error("Token exchange failed:", tokenResult.data);
-      return res.status(500).send("Token exchange failed: " + JSON.stringify(tokenResult.data));
+
+    console.log(`🔑 OAuth callback from ${shop}`);
+
+    if (!code || !shop) {
+      return res.status(400).send("Missing code or shop parameter");
     }
+
+    // Verify HMAC
+    if (!verifyOAuthHmac(req.query)) {
+      console.log("⚠️ HMAC verification failed, but continuing...");
+    }
+
+    // Exchange code for access token
+    const postData = JSON.stringify({
+      client_id: SHOPIFY_API_KEY,
+      client_secret: SHOPIFY_API_SECRET,
+      code: code
+    });
+
+    const tokenResult = await httpsRequest({
+      hostname: shop,
+      path: "/admin/oauth/access_token",
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(postData)
+      }
+    }, postData);
+
+    console.log(`   Token exchange status: ${tokenResult.status}`);
+
+    if (tokenResult.status !== 200 || !tokenResult.data.access_token) {
+      console.error("   Token exchange failed:", tokenResult.data);
+      return res.status(500).send(`Token exchange failed: ${JSON.stringify(tokenResult.data)}`);
+    }
+
     const accessToken = tokenResult.data.access_token;
     shopTokens[shop] = accessToken;
-    console.log("Got access token for " + shop);
+    console.log(`✅ Got access token for ${shop}: ${accessToken.substring(0, 8)}...`);
+
+    // Auto-register Carrier Service
     const csResult = await registerCarrierService(shop, accessToken);
-    let msg = "";
+
+    let message = "";
     if (csResult.status === 201) {
-      msg = "<h2>App instalata cu succes!</h2><p>Carrier Service Raben Logistics a fost inregistrat.</p><p>ID: " + (csResult.data.carrier_service ? csResult.data.carrier_service.id : "N/A") + "</p><p>Callback: " + (csResult.data.carrier_service ? csResult.data.carrier_service.callback_url : "N/A") + "</p>";
+      message = `<h2>✅ App instalată cu succes!</h2>
+        <p>Carrier Service „Raben Logistics" a fost înregistrat.</p>
+        <p>ID: ${csResult.data.carrier_service?.id}</p>
+        <p>Callback: ${csResult.data.carrier_service?.callback_url}</p>
+        <p><a href="https://admin.shopify.com/store/${shop.replace('.myshopify.com', '')}/settings/shipping">→ Mergi la Settings &gt; Shipping</a></p>`;
     } else if (csResult.status === 422) {
-      msg = "<h2>Carrier Service exista deja</h2><p>App-ul a fost reinstalat.</p>";
+      message = `<h2>⚠️ Carrier Service există deja</h2>
+        <p>App-ul a fost reinstalat. Carrier Service era deja înregistrat.</p>
+        <p>Detalii: ${JSON.stringify(csResult.data)}</p>`;
     } else {
-      msg = "<h2>App instalata, dar Carrier Service nu s-a putut inregistra</h2><p>Status: " + csResult.status + "</p><p>Raspuns: " + JSON.stringify(csResult.data) + "</p><p>Token salvat, poti reincerca la /api/admin/register-carrier</p>";
+      message = `<h2>⚠️ App instalată, dar Carrier Service nu s-a putut înregistra</h2>
+        <p>Status: ${csResult.status}</p>
+        <p>Răspuns: ${JSON.stringify(csResult.data)}</p>
+        <p>Token salvat — poți reîncerca la /api/admin/register-carrier</p>`;
     }
-    res.send("<!DOCTYPE html><html><head><meta charset=utf-8><title>Granit Shipping</title><style>body{font-family:sans-serif;max-width:600px;margin:40px auto;padding:20px}</style></head><body>" + msg + "</body></html>");
+
+    res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Granit Shipping</title>
+      <style>body{font-family:sans-serif;max-width:600px;margin:40px auto;padding:20px}h2{color:#2e7d32}p{line-height:1.6}</style>
+      </head><body>${message}</body></html>`);
+
   } catch (err) {
     console.error("OAuth error:", err);
-    res.status(500).send("OAuth error: " + err.message);
+    res.status(500).send(`OAuth error: ${err.message}`);
   }
 });
 
+// ============================================================
+// GET /auth/install — Start OAuth flow (redirect to Shopify)
+// ============================================================
 app.get("/auth/install", (req, res) => {
   const shop = req.query.shop;
   if (!shop) return res.status(400).send("Missing shop parameter. Use: /auth/install?shop=your-store.myshopify.com");
-  const redirectUri = APP_URL ? APP_URL + "/auth/callback" : "https://" + (process.env.RAILWAY_PUBLIC_DOMAIN || "granit-shipping-calculator-production.up.railway.app") + "/auth/callback";
+
+  const redirectUri = APP_URL ? `${APP_URL}/auth/callback` : `https://${process.env.RAILWAY_PUBLIC_DOMAIN || "granit-shipping-calculator-production.up.railway.app"}/auth/callback`;
   const scopes = "read_shipping,write_shipping";
-  const installUrl = "https://" + shop + "/admin/oauth/authorize?client_id=" + SHOPIFY_API_KEY + "&scope=" + scopes + "&redirect_uri=" + encodeURIComponent(redirectUri);
-  console.log("Redirecting to Shopify OAuth: " + installUrl);
+  const installUrl = `https://${shop}/admin/oauth/authorize?client_id=${SHOPIFY_API_KEY}&scope=${scopes}&redirect_uri=${encodeURIComponent(redirectUri)}`;
+
+  console.log(`🔄 Redirecting to Shopify OAuth: ${installUrl}`);
   res.redirect(installUrl);
 });
 
+// ============================================================
+// GET /api/admin/register-carrier — Manual carrier registration
+// ============================================================
 app.get("/api/admin/register-carrier", async (req, res) => {
   const shop = req.query.shop;
   const token = req.query.token || shopTokens[shop];
-  if (!shop || !token) return res.status(400).json({ error: "Missing shop or token", usage: "/api/admin/register-carrier?shop=xxx.myshopify.com&token=YOUR_TOKEN", storedShops: Object.keys(shopTokens) });
+
+  if (!shop || !token) {
+    return res.status(400).json({
+      error: "Missing shop or token",
+      usage: "/api/admin/register-carrier?shop=xxx.myshopify.com&token=YOUR_TOKEN",
+      storedShops: Object.keys(shopTokens)
+    });
+  }
+
   try {
     const result = await registerCarrierService(shop, token);
     res.json({ status: result.status, data: result.data });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
+// ============================================================
+// POST /api/shipping-rates — Shopify Carrier Service API
+// ============================================================
 app.post("/api/shipping-rates", verifyShopifyHmac, (req, res) => {
   try {
     const { rate } = req.body;
     if (!rate) return res.status(400).json({ rates: [] });
+
     const postalCode = rate.destination?.postal_code || "";
     const items = rate.items || [];
-    let totalSqm = 0;
-    for (const item of items) totalSqm += item.quantity;
+
+    // Grupăm itemii per greutate (grams = greutatea per unitate în grame din Shopify)
+    // quantity = nr de m² comandate per item
+    // item.grams = greutatea per 1 m² a produsului (setată în Shopify, în grame)
+    const weightGroups = {};
+    for (const item of items) {
+      const sqm = item.quantity;
+      // Shopify trimite grams per unitate; convertim în kg/m²
+      // Dacă grams = 0 sau lipsește, folosim default-ul din CONFIG
+      const kgPerSqm = (item.grams && item.grams > 0) ? item.grams / 1000 : CONFIG.KG_PER_SQM;
+      const key = kgPerSqm.toString();
+      if (!weightGroups[key]) {
+        weightGroups[key] = { sqm: 0, kgPerSqm };
+      }
+      weightGroups[key].sqm += sqm;
+    }
+
+    const materialGroups = Object.values(weightGroups);
+    const totalSqm = materialGroups.reduce((sum, g) => sum + g.sqm, 0);
+
     if (totalSqm <= 0) return res.json({ rates: [] });
-    const result = calculateShipping(totalSqm, postalCode);
-    if (!result.success) return res.json({ rates: [{ service_name: "Livrare Raben - Contactati-ne", description: result.message, service_code: "RABEN_ERROR", currency: "RON", total_price: 0 }] });
+
+    console.log(`📦 Shipping request: ${totalSqm} m², postal: ${postalCode}, groups:`, JSON.stringify(materialGroups));
+
+    const result = calculateShipping(materialGroups, postalCode);
+
+    if (!result.success) {
+      return res.json({ rates: [{ service_name: "Livrare Raben — Contactați-ne", description: result.message, service_code: "RABEN_ERROR", currency: "RON", total_price: 0 }] });
+    }
+
     const priceInBani = Math.round(result.totalPrice * 100);
-    const totalPallets = result.deliveries.reduce((s, d) => s + d.pallets, 0);
+    const totalPallets = result.totalPallets;
     const minDays = result.zone <= 3 ? 2 : 3;
     const maxDays = result.zone <= 3 ? 4 : 6;
-    let desc = totalPallets + " palet" + (totalPallets > 1 ? "i" : "") + ", " + result.totalSqm + " mp, Zona " + result.zone;
-    if (result.numDeliveries > 1) desc += " (" + result.numDeliveries + " livrari)";
-    return res.json({ rates: [{ service_name: "Livrare Raben Logistics", description: desc, service_code: "RABEN_STANDARD", currency: "RON", total_price: priceInBani, min_delivery_date: addBusinessDays(new Date(), minDays).toISOString().split("T")[0], max_delivery_date: addBusinessDays(new Date(), maxDays).toISOString().split("T")[0] }] });
-  } catch (err) { console.error("Eroare:", err); return res.status(500).json({ rates: [] }); }
+
+    let desc = `${totalPallets} palet${totalPallets > 1 ? "i" : ""}, ${result.totalSqm} m², Zona ${result.zone}`;
+    if (result.numDeliveries > 1) desc += ` (${result.numDeliveries} livrări)`;
+
+    return res.json({
+      rates: [{
+        service_name: "Livrare Raben Logistics",
+        description: desc,
+        service_code: "RABEN_STANDARD",
+        currency: "RON",
+        total_price: priceInBani,
+        min_delivery_date: addBusinessDays(new Date(), minDays).toISOString().split("T")[0],
+        max_delivery_date: addBusinessDays(new Date(), maxDays).toISOString().split("T")[0],
+      }]
+    });
+  } catch (err) {
+    console.error("Eroare:", err);
+    return res.status(500).json({ rates: [] });
+  }
 });
 
+// ============================================================
+// GET /api/calculate — Calculator standalone (testare)
+// ============================================================
 app.get("/api/calculate", (req, res) => {
-  const sqm = parseFloat(req.query.sqm);
   const postal = req.query.postal || "";
-  if (!sqm || !postal) return res.status(400).json({ error: "Utilizare: /api/calculate?sqm=65&postal=010045" });
-  return res.json(calculateShipping(sqm, postal));
+  if (!postal) return res.status(400).json({ error: "Utilizare: /api/calculate?sqm=65&postal=010045 sau /api/calculate?groups=60:30,20:60&postal=010045" });
+
+  // Suport pentru greutăți variabile: groups=60:30,20:60 (sqm:kgPerSqm)
+  if (req.query.groups) {
+    const materialGroups = req.query.groups.split(",").map(g => {
+      const [sqm, kgPerSqm] = g.split(":").map(Number);
+      return { sqm, kgPerSqm: kgPerSqm || CONFIG.KG_PER_SQM };
+    });
+    return res.json(calculateShipping(materialGroups, postal));
+  }
+
+  // Backward compatible: sqm singur cu greutate default sau specificată
+  const sqm = parseFloat(req.query.sqm);
+  const kgPerSqm = parseFloat(req.query.kg) || CONFIG.KG_PER_SQM;
+  if (!sqm) return res.status(400).json({ error: "Utilizare: /api/calculate?sqm=65&postal=010045&kg=60" });
+  return res.json(calculateShipping([{ sqm, kgPerSqm }], postal));
 });
 
+// ============================================================
+// POST /api/admin/update-config — Actualizare DAF/ADV
+// ============================================================
 app.post("/api/admin/update-config", (req, res) => {
   const adminKey = process.env.ADMIN_API_KEY || "change-me-in-production";
   if (req.body.api_key !== adminKey) return res.status(401).json({ error: "Unauthorized" });
+
   if (req.body.daf_percent !== undefined) CONFIG.DAF_PERCENT = parseFloat(req.body.daf_percent);
   if (req.body.adv_cost !== undefined) CONFIG.ADV_COST = parseFloat(req.body.adv_cost);
+
   return res.json({ success: true, config: { DAF_PERCENT: CONFIG.DAF_PERCENT, ADV_COST: CONFIG.ADV_COST } });
 });
 
+// Health check
 app.get("/", (req, res) => {
-  res.json({ status: "OK", service: "Granit Online Shipping v3", config: { DAF: CONFIG.DAF_PERCENT + "%", ADV: CONFIG.ADV_COST + " RON", MAX_KG: CONFIG.MAX_KG_PER_DELIVERY }, installedShops: Object.keys(shopTokens) });
+  res.json({
+    status: "OK",
+    service: "Granit Online Shipping v3",
+    config: {
+      DAF: `${CONFIG.DAF_PERCENT * 100}%`,
+      ADV: `${CONFIG.ADV_COST} RON`,
+      MAX_KG: CONFIG.MAX_KG_PER_DELIVERY
+    },
+    installedShops: Object.keys(shopTokens)
+  });
 });
 
 function addBusinessDays(date, days) {
@@ -196,10 +345,10 @@ function addBusinessDays(date, days) {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("Granit Online Shipping v3 on port " + PORT);
-  console.log("  DAF: " + CONFIG.DAF_PERCENT + "% | ADV: " + CONFIG.ADV_COST + " RON | Max/livrare: " + CONFIG.MAX_KG_PER_DELIVERY + " kg");
-  console.log("  API Key: " + (SHOPIFY_API_KEY ? SHOPIFY_API_KEY.substring(0, 8) + "..." : "NOT SET"));
-  console.log("  Test: http://localhost:" + PORT + "/api/calculate?sqm=60&postal=010045");
+  console.log(`🚛 Granit Online Shipping v3 on port ${PORT}`);
+  console.log(`   DAF: ${CONFIG.DAF_PERCENT}% | ADV: ${CONFIG.ADV_COST} RON | Max/livrare: ${CONFIG.MAX_KG_PER_DELIVERY} kg`);
+  console.log(`   API Key: ${SHOPIFY_API_KEY ? SHOPIFY_API_KEY.substring(0, 8) + "..." : "NOT SET"}`);
+  console.log(`   Test: http://localhost:${PORT}/api/calculate?sqm=60&postal=010045`);
 });
 
 module.exports = app;
