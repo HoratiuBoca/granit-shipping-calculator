@@ -14,8 +14,8 @@
 // ============================================================
 // PARAMETRI EDITABILI
 // ============================================================
-const CONFIG = {
-  DAF_PERCENT: 0.16,
+const CONFI = {
+      DAF_PERCENT: 0.40,
   ADV_COST: 10,
   TVA_PERCENT: 0.19,
   SQM_PER_PALLET: 40,        // doar ca fallback
