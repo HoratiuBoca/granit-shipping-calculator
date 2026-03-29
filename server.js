@@ -1,13 +1,13 @@
 /**
- * Granit Online â Shopify Carrier Service API v4
- * Suport produse piatrÄ (Raben) + produse Ã®ntreÈinere (FAN Courier)
+ * Granit Online — Shopify Carrier Service API v4
+ * Suport produse piatră (Raben) + produse întreținere (FAN Courier)
  *
- * LOGICA COÈ:
- * 1. Doar piatrÄ (fÄrÄ INT-) â Raben Logistics (existent)
- * 2. Doar Ã®ntreÈinere (toate INT-) â FAN Courier
- * 3. Mix (piatrÄ + INT-) â Raben Logistics (Ã®ntreÈinerea merge gratis cu paletul)
+ * LOGICA COȘ:
+ * 1. Doar piatră (fără INT-) → Raben Logistics (existent)
+ * 2. Doar întreținere (toate INT-) → FAN Courier
+ * 3. Mix (piatră + INT-) → Raben Logistics (întreținerea merge gratis cu paletul)
  *
- * DetecÈie: SKU prefix "INT-" = produs de Ã®ntreÈinere
+ * Detecție: SKU prefix "INT-" = produs de întreținere
  */
 
 const express = require("express");
@@ -30,7 +30,7 @@ const SHOPIFY_API_KEY    = process.env.SHOPIFY_API_KEY || "";
 const SHOPIFY_API_SECRET = process.env.SHOPIFY_API_SECRET || "";
 const APP_URL            = process.env.APP_URL || "";
 
-// Prefix SKU pentru produse de Ã®ntreÈinere
+// Prefix SKU pentru produse de întreținere
 const MAINTENANCE_SKU_PREFIX = process.env.MAINTENANCE_SKU_PREFIX || "INT-";
 
 // In-memory token store (persists until redeploy)
@@ -83,14 +83,14 @@ async function registerCarrierService(shop, accessToken) {
 
   const postData = JSON.stringify({
     carrier_service: {
-      name: "Granit Online â Livrare CalculatÄ",
+      name: "Granit Online — Livrare Calculată",
       callback_url: callbackUrl,
       service_discovery: true,
       format: "json"
     }
   });
 
-  console.log(`ð¦ Registering Carrier Service on ${shop}...`);
+  console.log(`📦 Registering Carrier Service on ${shop}...`);
   console.log(`  Callback URL: ${callbackUrl}`);
 
   const result = await httpsRequest({
@@ -117,7 +117,7 @@ app.use((req, res, next) => {
 });
 
 // ============================================================
-// HELPER: ClasificÄ itemii din coÈ
+// HELPER: Clasifică itemii din coș
 // ============================================================
 function classifyCartItems(items) {
   const stoneItems = [];
@@ -145,18 +145,18 @@ function classifyCartItems(items) {
 }
 
 // ============================================================
-// GET /auth/callback â Shopify OAuth callback
+// GET /auth/callback — Shopify OAuth callback
 // ============================================================
 app.get("/auth/callback", async (req, res) => {
   try {
     const { code, shop, hmac, timestamp } = req.query;
-    console.log(`ð OAuth callback from ${shop}`);
+    console.log(`🔑 OAuth callback from ${shop}`);
 
     if (!code || !shop) {
       return res.status(400).send("Missing code or shop parameter");
     }
     if (!verifyOAuthHmac(req.query)) {
-      console.log("â ï¸ HMAC verification failed, but continuing...");
+      console.log("⚠ï¸ HMAC verification failed, but continuing...");
     }
 
     const postData = JSON.stringify({
@@ -184,25 +184,25 @@ app.get("/auth/callback", async (req, res) => {
 
     const accessToken = tokenResult.data.access_token;
     shopTokens[shop] = accessToken;
-    console.log(`â Got access token for ${shop}: ${accessToken.substring(0, 8)}...`);
+    console.log(`✅ Got access token for ${shop}: ${accessToken.substring(0, 8)}...`);
 
     const csResult = await registerCarrierService(shop, accessToken);
 
     let message = "";
     if (csResult.status === 201) {
-      message = `<h2>â App instalatÄ cu succes!</h2>
-        <p>Carrier Service âGranit Online â Livrare CalculatÄ" a fost Ã®nregistrat.</p>
+      message = `<h2>✅ App instalată cu succes!</h2>
+        <p>Carrier Service „Granit Online — Livrare Calculată" a fost înregistrat.</p>
         <p>ID: ${csResult.data.carrier_service?.id}</p>
         <p>Callback: ${csResult.data.carrier_service?.callback_url}</p>
-        <p><a href="https://admin.shopify.com/store/${shop.replace('.myshopify.com', '')}/settings/shipping">â Mergi la Settings &gt; Shipping</a></p>`;
+        <p><a href="https://admin.shopify.com/store/${shop.replace('.myshopify.com', '')}/settings/shipping">→ Mergi la Settings &gt; Shipping</a></p>`;
     } else if (csResult.status === 422) {
-      message = `<h2>â ï¸ Carrier Service existÄ deja</h2>
-        <p>App-ul a fost reinstalat. Carrier Service era deja Ã®nregistrat.</p>
+      message = `<h2>⚠ï¸ Carrier Service există deja</h2>
+        <p>App-ul a fost reinstalat. Carrier Service era deja înregistrat.</p>
         <p>Detalii: ${JSON.stringify(csResult.data)}</p>`;
     } else {
-      message = `<h2>â ï¸ App instalatÄ, dar Carrier Service nu s-a putut Ã®nregistra</h2>
-        <p>Status: ${csResult.status}</p><p>RÄspuns: ${JSON.stringify(csResult.data)}</p>
-        <p>Token salvat â poÈi reÃ®ncerca la /api/admin/register-carrier</p>`;
+      message = `<h2>⚠ï¸ App instalată, dar Carrier Service nu s-a putut înregistra</h2>
+        <p>Status: ${csResult.status}</p><p>Răspuns: ${JSON.stringify(csResult.data)}</p>
+        <p>Token salvat — poți reîncerca la /api/admin/register-carrier</p>`;
     }
 
     res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Granit Shipping</title>
@@ -215,7 +215,7 @@ app.get("/auth/callback", async (req, res) => {
 });
 
 // ============================================================
-// GET /auth/install â Start OAuth flow
+// GET /auth/install — Start OAuth flow
 // ============================================================
 app.get("/auth/install", (req, res) => {
   const shop = req.query.shop;
@@ -228,12 +228,12 @@ app.get("/auth/install", (req, res) => {
   const scopes = "read_shipping,write_shipping";
   const installUrl = `https://${shop}/admin/oauth/authorize?client_id=${SHOPIFY_API_KEY}&scope=${scopes}&redirect_uri=${encodeURIComponent(redirectUri)}`;
 
-  console.log(`ð Redirecting to Shopify OAuth: ${installUrl}`);
+  console.log(`🔄 Redirecting to Shopify OAuth: ${installUrl}`);
   res.redirect(installUrl);
 });
 
 // ============================================================
-// GET /api/admin/register-carrier â Manual carrier registration
+// GET /api/admin/register-carrier — Manual carrier registration
 // ============================================================
 app.get("/api/admin/register-carrier", async (req, res) => {
   const shop = req.query.shop;
@@ -256,7 +256,7 @@ app.get("/api/admin/register-carrier", async (req, res) => {
 });
 
 // ============================================================
-// POST /api/shipping-rates â Shopify Carrier Service API
+// POST /api/shipping-rates — Shopify Carrier Service API
 // ============================================================
 app.post("/api/shipping-rates", verifyShopifyHmac, async (req, res) => {
   try {
@@ -269,18 +269,18 @@ app.post("/api/shipping-rates", verifyShopifyHmac, async (req, res) => {
 
     if (items.length === 0) return res.json({ rates: [] });
 
-    // ââ ClasificÄm itemii ââ
+    // ── Clasificăm itemii ──
     const { stoneItems, maintenanceItems, cartType } = classifyCartItems(items);
 
-    console.log(`ð Cart: ${cartType} | ${stoneItems.length} piatrÄ, ${maintenanceItems.length} Ã®ntreÈinere | postal: ${postalCode}`);
+    console.log(`🛒 Cart: ${cartType} | ${stoneItems.length} piatră, ${maintenanceItems.length} întreținere | postal: ${postalCode}`);
 
-    // ââ SCENARIUL 1: Doar produse de Ã®ntreÈinere â FAN Courier ââ
+    // ── SCENARIUL 1: Doar produse de întreținere → FAN Courier ──
     if (cartType === "maintenance_only") {
       const fanResult = await calculateMaintenanceShipping(maintenanceItems, destination);
 
       if (!fanResult.success) {
         return res.json({ rates: [{
-          service_name: "Livrare FAN Courier â ContactaÈi-ne",
+          service_name: "Livrare FAN Courier — Contactați-ne",
           description: fanResult.message || "Eroare la calcul",
           service_code: "FAN_ERROR",
           currency: "RON",
@@ -300,11 +300,11 @@ app.post("/api/shipping-rates", verifyShopifyHmac, async (req, res) => {
       }] });
     }
 
-    // ââ SCENARIUL 2 & 3: PiatrÄ (cu sau fÄrÄ Ã®ntreÈinere) â Raben ââ
-    // La coÈ mixt, Ã®ntreÈinerea merge GRATIS cu paletul de piatrÄ
+    // ── SCENARIUL 2 & 3: Piatră (cu sau fără întreținere) → Raben ──
+    // La coș mixt, întreținerea merge GRATIS cu paletul de piatră
 
-    // GrupÄm itemii de PIATRÄ per greutate (grams = greutatea per unitate Ã®n grame)
-    // quantity = nr de mÂ² comandate per item
+    // Grupăm itemii de PIATRă per greutate (grams = greutatea per unitate în grame)
+    // quantity = nr de m² comandate per item
     const weightGroups = {};
     for (const item of stoneItems) {
       const sqm = item.quantity;
@@ -321,13 +321,13 @@ app.post("/api/shipping-rates", verifyShopifyHmac, async (req, res) => {
 
     if (totalSqm <= 0) return res.json({ rates: [] });
 
-    console.log(`ð¦ Raben: ${totalSqm} mÂ², postal: ${postalCode}, groups:`, JSON.stringify(materialGroups));
+    console.log(`📦 Raben: ${totalSqm} m², postal: ${postalCode}, groups:`, JSON.stringify(materialGroups));
 
     const result = calculateShipping(materialGroups, postalCode);
 
     if (!result.success) {
       return res.json({ rates: [{
-        service_name: "Livrare Raben â ContactaÈi-ne",
+        service_name: "Livrare Raben — Contactați-ne",
         description: result.message,
         service_code: "RABEN_ERROR",
         currency: "RON",
@@ -340,12 +340,12 @@ app.post("/api/shipping-rates", verifyShopifyHmac, async (req, res) => {
     const minDays = result.zone <= 3 ? 2 : 3;
     const maxDays = result.zone <= 3 ? 4 : 6;
 
-    let desc = `${totalPallets} palet${totalPallets > 1 ? "i" : ""}, ${result.totalSqm} mÂ², Zona ${result.zone}`;
-    if (result.numDeliveries > 1) desc += ` (${result.numDeliveries} livrÄri)`;
+    let desc = `${totalPallets} palet${totalPallets > 1 ? "i" : ""}, ${result.totalSqm} m², Zona ${result.zone}`;
+    if (result.numDeliveries > 1) desc += ` (${result.numDeliveries} livrări)`;
 
-    // La coÈ mixt, adÄugÄm notÄ cÄ Ã®ntreÈinerea e inclusÄ gratis
+    // La coș mixt, adăugăm notă că întreținerea e inclusă gratis
     if (cartType === "mixed") {
-      desc += " + produse Ã®ntreÈinere GRATUIT";
+      desc += " + produse întreținere GRATUIT";
     }
 
     return res.json({ rates: [{
@@ -365,7 +365,7 @@ app.post("/api/shipping-rates", verifyShopifyHmac, async (req, res) => {
 });
 
 // ============================================================
-// GET /api/calculate â Calculator standalone (testare)
+// GET /api/calculate — Calculator standalone (testare)
 // ============================================================
 app.get("/api/calculate", (req, res) => {
   const postal = req.query.postal || "";
@@ -388,7 +388,7 @@ app.get("/api/calculate", (req, res) => {
 });
 
 // ============================================================
-// GET /api/calculate-fan â Calculator FAN Courier (testare)
+// GET /api/calculate-fan — Calculator FAN Courier (testare)
 // ============================================================
 app.get("/api/calculate-fan", async (req, res) => {
   const weight = parseFloat(req.query.weight) || 1;
@@ -396,7 +396,7 @@ app.get("/api/calculate-fan", async (req, res) => {
   const city = req.query.city || "Bucuresti";
   const parcels = parseInt(req.query.parcels) || 1;
 
-  // SimulÄm items din Shopify
+  // Simulăm items din Shopify
   const fakeItems = [{
     sku: "INT-TEST",
     grams: weight * 1000,
@@ -410,7 +410,7 @@ app.get("/api/calculate-fan", async (req, res) => {
 });
 
 // ============================================================
-// POST /api/admin/update-config â Actualizare DAF/ADV
+// POST /api/admin/update-config — Actualizare DAF/ADV
 // ============================================================
 app.post("/api/admin/update-config", (req, res) => {
   const adminKey = process.env.ADMIN_API_KEY || "change-me-in-production";
@@ -428,9 +428,9 @@ app.get("/", (req, res) => {
     status: "OK",
     service: "Granit Online Shipping v4",
     features: {
-      stone: "Raben Logistics (palet/mÂ²)",
+      stone: "Raben Logistics (palet/m²)",
       maintenance: "FAN Courier (colete individuale)",
-      mixed: "Raben only (Ã®ntreÈinere gratis cu paletul)",
+      mixed: "Raben only (întreținere gratis cu paletul)",
       skuPrefix: MAINTENANCE_SKU_PREFIX,
     },
     config: {
@@ -458,10 +458,10 @@ function addBusinessDays(date, days) {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`ð Granit Online Shipping v4 on port ${PORT}`);
+  console.log(`🚛 Granit Online Shipping v4 on port ${PORT}`);
   console.log(`  Raben: DAF ${CONFIG.DAF_PERCENT * 100}% | ADV ${CONFIG.ADV_COST} RON | Max ${CONFIG.MAX_KG_PER_DELIVERY} kg`);
-  console.log(`  FAN Courier: ${FAN_CONFIG.CLIENT_ID ? "API activ (ID: " + FAN_CONFIG.CLIENT_ID + ")" : "Fallback grilÄ staticÄ"}`);
-  console.log(`  SKU prefix Ã®ntreÈinere: "${MAINTENANCE_SKU_PREFIX}"`);
+  console.log(`  FAN Courier: ${FAN_CONFIG.CLIENT_ID ? "API activ (ID: " + FAN_CONFIG.CLIENT_ID + ")" : "Fallback grilă statică"}`);
+  console.log(`  SKU prefix întreținere: "${MAINTENANCE_SKU_PREFIX}"`);
   console.log(`  Test Raben: http://localhost:${PORT}/api/calculate?sqm=60&postal=010045`);
   console.log(`  Test FAN:   http://localhost:${PORT}/api/calculate-fan?weight=2&county=Bucuresti&city=Bucuresti`);
 });
