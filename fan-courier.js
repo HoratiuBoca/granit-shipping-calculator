@@ -1,9 +1,9 @@
 /**
- * FAN Courier â Modul calcul cost livrare pentru produse de Ã®ntreÈinere
+ * FAN Courier — Modul calcul cost livrare pentru produse de întreținere
  *
- * DouÄ moduri de funcÈionare:
- * 1. API FAN Courier (dacÄ sunt setate credenÈialele) â tarife exacte din contract
- * 2. GrilÄ de preÈuri staticÄ (fallback) â tarife configurabile manual
+ * Două moduri de funcționare:
+ * 1. API FAN Courier (dacă sunt setate credențialele) — tarife exacte din contract
+ * 2. Grilă de prețuri statică (fallback) — tarife configurabile manual
  *
  * API: https://api.fancourier.ro
  * Auth: Bearer Token (valid 24h)
@@ -21,12 +21,12 @@ const FAN_CONFIG = {
   USERNAME: process.env.FAN_USERNAME || "",
   PASSWORD: process.env.FAN_PASSWORD || "",
   SERVICE: process.env.FAN_SERVICE || "Standard",       // Standard, RedCode, etc.
-  PAYMENT: process.env.FAN_PAYMENT || "sender",         // sender = noi plÄtim
-  DEFAULT_LENGTH: 40,  // cm â dimensiuni default pachet
+  PAYMENT: process.env.FAN_PAYMENT || "sender",         // sender = noi plătim
+  DEFAULT_LENGTH: 40,  // cm — dimensiuni default pachet
   DEFAULT_WIDTH: 30,
   DEFAULT_HEIGHT: 30,
 
-  // GrilÄ staticÄ fallback (RON cu TVA) â editabilÄ din env
+  // Grilă statică fallback (RON cu TVA) — editabilă din env
   // Format: "maxKg:pret,maxKg:pret,..."
   // ex: "1:22,5:30,10:42,20:58,31:75"
   FALLBACK_GRID: process.env.FAN_PRICE_GRID || "1:22,3:28,5:33,10:42,15:52,20:62,25:72,31:82",
@@ -60,8 +60,8 @@ function httpsRequest(options, postData = null) {
 }
 
 /**
- * ParseazÄ grila de preÈuri din string
- * @returns {Array<{maxKg: number, price: number}>} sortat crescÄtor
+ * Parsează grila de prețuri din string
+ * @returns {Array<{maxKg: number, price: number}>} sortat crescător
  */
 function parseFallbackGrid(gridStr) {
   return gridStr.split(",").map(entry => {
@@ -71,7 +71,7 @@ function parseFallbackGrid(gridStr) {
 }
 
 /**
- * CautÄ preÈul Ã®n grila staticÄ pe baza greutÄÈii
+ * Caută prețul în grila statică pe baza greutății
  */
 function lookupFallbackPrice(weightKg) {
   const grid = parseFallbackGrid(FAN_CONFIG.FALLBACK_GRID);
@@ -80,7 +80,7 @@ function lookupFallbackPrice(weightKg) {
       return tier.price;
     }
   }
-  // Peste grila maximÄ â extrapolare liniarÄ din ultimele 2 trepte
+  // Peste grila maximă — extrapolare liniară din ultimele 2 trepte
   if (grid.length >= 2) {
     const last = grid[grid.length - 1];
     const prev = grid[grid.length - 2];
@@ -95,10 +95,10 @@ function lookupFallbackPrice(weightKg) {
 // ============================================================
 
 /**
- * ObÈine Bearer Token (cachat 24h)
+ * Obține Bearer Token (cachat 24h)
  */
 async function getToken() {
-  // Return cached dacÄ valid
+  // Return cached dacă valid
   if (cachedToken && tokenExpiresAt && new Date() < tokenExpiresAt) {
     return cachedToken;
   }
@@ -107,7 +107,7 @@ async function getToken() {
     return null;
   }
 
-  console.log("ð FAN Courier: ObÈin token nou...");
+  console.log("🔑 FAN Courier: Obțin token nou...");
 
   const result = await httpsRequest({
     hostname: FAN_CONFIG.API_BASE,
@@ -118,29 +118,29 @@ async function getToken() {
 
   if (result.status === 200 && result.data?.status === "success" && result.data?.data?.token) {
     cachedToken = result.data.data.token;
-    // Token valid 24h, dar reÃ®mprospÄtÄm la 23h ca sÄ fim siguri
+    // Token valid 24h, dar reîmprospătăm la 23h ca să fim siguri
     tokenExpiresAt = new Date(Date.now() + 23 * 60 * 60 * 1000);
-    console.log("â FAN Courier: Token obÈinut, expirÄ:", result.data.data.expiresAt);
+    console.log("✅ FAN Courier: Token obținut, expiră:", result.data.data.expiresAt);
     return cachedToken;
   }
 
-  console.error("â FAN Courier: Eroare la autentificare:", result.data);
+  console.error("❌ FAN Courier: Eroare la autentificare:", result.data);
   return null;
 }
 
 /**
- * CalculeazÄ tariful via API FAN Courier
+ * Calculează tariful via API FAN Courier
  *
- * @param {number} weightKg - greutate totalÄ Ã®n kg
+ * @param {number} weightKg - greutate totală în kg
  * @param {number} parcels - nr colete
- * @param {string} county - judeÈ destinatar (din Shopify: province)
+ * @param {string} county - județ destinatar (din Shopify: province)
  * @param {string} locality - localitate destinatar (din Shopify: city)
- * @param {object} dimensions - {length, width, height} Ã®n cm
+ * @param {object} dimensions - {length, width, height} în cm
  * @returns {object} - {success, total, details} sau {success: false, error}
  */
 async function calculateFanTariff(weightKg, parcels, county, locality, dimensions = {}) {
   const token = await getToken();
-  if (!token) return null; // No credentials â fallback
+  if (!token) return null; // No credentials → fallback
 
   const params = new URLSearchParams({
     clientId: FAN_CONFIG.CLIENT_ID,
@@ -156,7 +156,7 @@ async function calculateFanTariff(weightKg, parcels, county, locality, dimension
     "recipient[locality]": locality,
   });
 
-  console.log(`ð¦ FAN Courier: Calculez tarif â ${weightKg}kg, ${parcels} colet(e), ${locality}, ${county}`);
+  console.log(`📦 FAN Courier: Calculez tarif — ${weightKg}kg, ${parcels} colet(e), ${locality}, ${county}`);
 
   try {
     const result = await httpsRequest({
@@ -171,7 +171,7 @@ async function calculateFanTariff(weightKg, parcels, county, locality, dimension
 
     if (result.status === 200 && result.data?.status === "success" && result.data?.data) {
       const d = result.data.data;
-      console.log(`â FAN Courier: Tarif = ${d.total} RON (fÄrÄ TVA: ${d.costNoVAT})`);
+      console.log(`✅ FAN Courier: Tarif = ${d.total} RON (fără TVA: ${d.costNoVAT})`);
       return {
         success: true,
         total: d.total,           // RON cu TVA
@@ -185,14 +185,14 @@ async function calculateFanTariff(weightKg, parcels, county, locality, dimension
       };
     }
 
-    // Token expirat? ResetÄm Èi reÃ®ncercÄm o datÄ
+    // Token expirat? Resetăm și reîncercăm o dată
     if (result.status === 401) {
-      console.log("â ï¸ FAN Courier: Token expirat, regenerez...");
+      console.log("⚠ï¸ FAN Courier: Token expirat, regenerez...");
       cachedToken = null;
       tokenExpiresAt = null;
       const retryToken = await getToken();
       if (retryToken) {
-        // O singurÄ reÃ®ncercare
+        // O singură reîncercare
         const retry = await httpsRequest({
           hostname: FAN_CONFIG.API_BASE,
           path: `/reports/awb/internal-tariff?${params.toString()}`,
@@ -209,50 +209,50 @@ async function calculateFanTariff(weightKg, parcels, county, locality, dimension
       }
     }
 
-    console.error("â FAN Courier: Eroare la tarif:", result.status, result.data);
+    console.error("❌ FAN Courier: Eroare la tarif:", result.status, result.data);
     return null; // fallback to static grid
   } catch (err) {
-    console.error("â FAN Courier: Eroare reÈea:", err.message);
+    console.error("❌ FAN Courier: Eroare rețea:", err.message);
     return null;
   }
 }
 
 // ============================================================
-// FUNCÈIA PRINCIPALÄ
+// FUNCȚIA PRINCIPALă
 // ============================================================
 
 /**
- * CalculeazÄ costul de livrare FAN Courier pentru produse de Ã®ntreÈinere
+ * Calculează costul de livrare FAN Courier pentru produse de întreținere
  *
- * @param {Array} items - array de item-uri maintenance din coÈul Shopify
+ * @param {Array} items - array de item-uri maintenance din coșul Shopify
  *   Fiecare item: { name, sku, grams, quantity, price }
  * @param {object} destination - { province, city, postal_code, country }
  * @returns {object} - { success, totalPrice, description, source }
  */
 async function calculateMaintenanceShipping(items, destination) {
   if (!items || items.length === 0) {
-    return { success: false, error: "NO_ITEMS", message: "Niciun produs de Ã®ntreÈinere." };
+    return { success: false, error: "NO_ITEMS", message: "Niciun produs de întreținere." };
   }
 
-  // CalculÄm greutatea totalÄ (Shopify trimite grams per unitate)
+  // Calculăm greutatea totală (Shopify trimite grams per unitate)
   let totalGrams = 0;
   let totalItems = 0;
   for (const item of items) {
-    const itemWeight = (item.grams || 500) * item.quantity; // default 500g dacÄ lipseÈte
+    const itemWeight = (item.grams || 500) * item.quantity; // default 500g dacă lipsește
     totalGrams += itemWeight;
     totalItems += item.quantity;
   }
 
   const totalKg = totalGrams / 1000;
-  // EstimÄm nr de colete: 1 colet dacÄ sub 30kg, altfel Ã®mpÄrÈim
+  // Estimăm nr de colete: 1 colet dacă sub 30kg, altfel împărțim
   const parcels = Math.max(1, Math.ceil(totalKg / 30));
 
   const county = destination.province || "";
   const city = destination.city || "";
 
-  console.log(`ð¦ Maintenance shipping: ${totalItems} produse, ${totalKg}kg, ${parcels} colet(e) â ${city}, ${county}`);
+  console.log(`📦 Maintenance shipping: ${totalItems} produse, ${totalKg}kg, ${parcels} colet(e) → ${city}, ${county}`);
 
-  // ÃncercÄm API FAN Courier mai Ã®ntÃ¢i
+  // Încercăm API FAN Courier mai întâi
   if (FAN_CONFIG.CLIENT_ID && FAN_CONFIG.USERNAME) {
     const apiResult = await calculateFanTariff(totalKg, parcels, county, city);
     if (apiResult && apiResult.success) {
@@ -266,10 +266,10 @@ async function calculateMaintenanceShipping(items, destination) {
         details: apiResult
       };
     }
-    console.log("â ï¸ FAN API indisponibil, folosesc grila staticÄ...");
+    console.log("⚠ï¸ FAN API indisponibil, folosesc grila statică...");
   }
 
-  // Fallback: grilÄ staticÄ
+  // Fallback: grilă statică
   const fallbackPrice = lookupFallbackPrice(totalKg);
   return {
     success: true,
