@@ -17,7 +17,7 @@
 const CONFIG = {
       DAF_PERCENT: 0.40,
   ADV_COST: 10,
-  TVA_PERCENT: 0.19,
+      TVA_PERCENT: 0.21,
   SQM_PER_PALLET: 40,        // doar ca fallback
   KG_PER_SQM: 30,            // doar ca fallback (default)
   MAX_KG_PER_PALLET: 1200,   // limită greutate per palet
