@@ -1,6 +1,6 @@
 {
   "name": "granit-online-shipping-calculator",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Calculator automat cost livrare Raben pentru Granit Online (Shopify)",
   "main": "server.js",
   "scripts": {
