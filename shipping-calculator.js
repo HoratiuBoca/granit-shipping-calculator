@@ -1,14 +1,16 @@
 /**
- * Granit Online — Modul Calcul Cost Livrare Raben v4
+ * Granit Online — Modul Calcul Cost Livrare Raben v5
  * Suport greutăți variabile per produs (30, 60, 80 kg/m²)
  * Paleți calculați separat per grup de greutate
+ * Fiecare palet prețuit la propria greutate reală
  *
  * LOGICA:
  * 1. Produsele se grupează per greutate (kg/m²)
  * 2. Pentru fiecare grup: m² × kg/m² = kg → paleți (la 1200 kg/palet)
- * 3. Se adună toți paleții → se calculează greutatea medie per palet
- * 4. Se caută prețul în tabelul Raben
- * 5. Peste 5.000 kg total → se împarte în livrări separate de max 5t
+ * 3. Se calculează greutatea REALĂ a fiecărui palet individual
+ * 4. Paleții se grupează per interval de greutate
+ * 5. Se caută prețul în tabelul Raben per grupă (cu discount de volum)
+ * 6. Peste 5.000 kg total → se împarte în livrări separate de max 5t
  */
 
 // ============================================================
@@ -53,7 +55,7 @@ const PRICES = {
     3: [221.40,328.30,340.86,374.43,412.73,459.35,472.63,476.72,480.81,509.14,513.44,517.73,522.03,526.32,530.62],
     4: [274.99,415.85,432.79,475.66,528.94,587.18,603.02,607.11,611.20,646.05,650.34,654.64,658.93,663.23,667.52],
     5: [319.51,493.54,514.90,566.16,634.32,703.10,721.26,725.35,729.44,770.20,774.50,778.79,783.08,787.38,791.67],
-    6: [355.21,561.61,587.41,646.18,729.14,807.40,827.63,831.72,835.81,881.90,886.19,890.49,894.78,899.04,903.37],
+    6: [355.21,561.61,587.41,646.18,729.14,807.40,827.63,831.72,835.81,881.90,886.19,890.49,894.78,899.08,903.37],
     7: [403.46,642.18,672.20,739.59,836.86,925.90,948.50,952.59,956.68,1008.81,1013.11,1017.40,1021.70,1025.99,1030.29],
     8: [448.98,719.45,753.63,829.31,940.74,1040.16,1065.05,1069.14,1073.23,1131.19,1135.48,1139.78,1144.07,1148.37,1152.66],
   },
@@ -126,43 +128,68 @@ function lookupPrice(weightRange, pallets, zone) {
 
 /**
  * Calculează paleți pentru un grup de material cu o anumită greutate/m²
- * @param {number} sqm - m² totali pentru acest grup
- * @param {number} kgPerSqm - greutatea per m² a materialului
- * @returns {object} - { sqm, pallets, totalKg, kgPerSqm }
+ * Returnează și greutatea reală a fiecărui palet individual
  */
 function calculatePalletsForGroup(sqm, kgPerSqm) {
   const totalKg = sqm * kgPerSqm;
   const sqmPerPallet = Math.floor(CONFIG.MAX_KG_PER_PALLET / kgPerSqm);
   const pallets = Math.ceil(sqm / sqmPerPallet);
-  return { sqm: round2(sqm), pallets, totalKg: round2(totalKg), kgPerSqm, sqmPerPallet };
+
+  // Calculăm greutatea reală a fiecărui palet
+  const palletWeights = [];
+  let remainingSqm = sqm;
+  for (let i = 0; i < pallets; i++) {
+    const palletSqm = Math.min(remainingSqm, sqmPerPallet);
+    palletWeights.push(round2(palletSqm * kgPerSqm));
+    remainingSqm -= palletSqm;
+  }
+
+  return { sqm: round2(sqm), pallets, totalKg: round2(totalKg), kgPerSqm, sqmPerPallet, palletWeights };
 }
 
 /**
- * Calculează costul unei livrări date de un anumit nr de paleți + kg totali
+ * Calculează costul unei livrări — fiecare palet prețuit la greutatea lui reală
+ * Paleții din același interval de greutate beneficiază de discount de volum
  */
-function calculateSingleDelivery(totalPallets, totalKg, zone) {
-  if (totalPallets <= 0 || totalKg <= 0) return null;
-  const avgKg = totalKg / totalPallets;
-  const weightRange = getWeightRange(avgKg);
+function calculateSingleDelivery(palletWeights, zone) {
+  if (!palletWeights || palletWeights.length === 0) return null;
 
-  // Limita din tabel este 8 paleți max
-  const lookupPallets = Math.min(totalPallets, 8);
-  const price = lookupPrice(weightRange, lookupPallets, zone);
-  if (price === null) return null;
+  const totalKg = palletWeights.reduce((sum, w) => sum + w, 0);
 
-  // Dacă avem mai mult de 8 paleți, scalăm liniar (preț per palet × nr paleți)
-  let finalPrice = price;
-  if (totalPallets > 8) {
-    const pricePerPallet = price / 8;
-    finalPrice = pricePerPallet * totalPallets;
+  // Grupăm paleții per interval de greutate
+  const rangeGroups = {};
+  for (const weight of palletWeights) {
+    const range = getWeightRange(weight);
+    if (!rangeGroups[range]) rangeGroups[range] = 0;
+    rangeGroups[range]++;
+  }
+
+  // Prețuim fiecare grupă separat (cu discount de volum din tabel)
+  let totalBasePrice = 0;
+  const rangeDetails = [];
+
+  for (const [range, count] of Object.entries(rangeGroups)) {
+    const lookupPallets = Math.min(count, 8);
+    const price = lookupPrice(range, lookupPallets, zone);
+    if (price === null) return null;
+
+    // Dacă avem mai mult de 8 paleți în aceeași grupă, scalăm liniar
+    let groupPrice = price;
+    if (count > 8) {
+      const pricePerPallet = price / 8;
+      groupPrice = pricePerPallet * count;
+    }
+
+    totalBasePrice += groupPrice;
+    rangeDetails.push({ weightRange: range, pallets: count, price: round2(groupPrice) });
   }
 
   return {
-    pallets: totalPallets,
+    pallets: palletWeights.length,
     totalKg: round2(totalKg),
-    avgKg: round2(avgKg),
-    weightRange,
-    basePrice: round2(finalPrice)
+    palletWeights,
+    rangeDetails,
+    basePrice: round2(totalBasePrice)
   };
 }
 
@@ -203,12 +230,14 @@ function calculateShipping(materialGroupsOrSqm, postalCode, config = {}) {
   let totalPallets = 0;
   let totalKg = 0;
   const groupDetails = [];
+  const allPalletWeights = [];
 
   for (const group of materialGroups) {
     const result = calculatePalletsForGroup(group.sqm, group.kgPerSqm);
     totalPallets += result.pallets;
     totalKg += result.totalKg;
     groupDetails.push(result);
+    allPalletWeights.push(...result.palletWeights);
   }
 
   // Splitting la 5 tone
@@ -216,37 +245,42 @@ function calculateShipping(materialGroupsOrSqm, postalCode, config = {}) {
   const deliveries = [];
 
   if (numDeliveries === 1) {
-    // O singură livrare
-    const delivery = calculateSingleDelivery(totalPallets, totalKg, zone);
+    // O singură livrare — toate greutățile paleților
+    const delivery = calculateSingleDelivery(allPalletWeights, zone);
     if (!delivery) {
       return { success: false, error: "PRICE_NOT_FOUND", message: "Eroare la calcularea pretului. Contactati-ne." };
     }
     deliveries.push(delivery);
   } else {
-    // Îímpărțim proporțional pe livrări
-    const palletsPerDelivery = Math.ceil(totalPallets / numDeliveries);
-    const kgPerDelivery = totalKg / numDeliveries;
-    let remainingPallets = totalPallets;
-    let remainingKg = totalKg;
+    // Împărțim paleții pe livrări, încercând să echilibrăm greutatea
+    // Sortăm paleții descrescător ca să distribuim uniform
+    const sortedWeights = [...allPalletWeights].sort((a, b) => b - a);
+    const deliveryBuckets = Array.from({ length: numDeliveries }, () => []);
+    const deliveryKg = new Array(numDeliveries).fill(0);
 
-    for (let i = 0; i < numDeliveries; i++) {
-      const isLast = (i === numDeliveries - 1);
-      const delPallets = isLast ? remainingPallets : Math.min(palletsPerDelivery, remainingPallets);
-      const delKg = isLast ? remainingKg : Math.min(kgPerDelivery, remainingKg);
+    for (const weight of sortedWeights) {
+      // Adăugăm paletul la livrarea cu cea mai mică greutate totală
+      let minIdx = 0;
+      for (let i = 1; i < numDeliveries; i++) {
+        if (deliveryKg[i] < deliveryKg[minIdx]) minIdx = i;
+      }
+      deliveryBuckets[minIdx].push(weight);
+      deliveryKg[minIdx] += weight;
+    }
 
-      const delivery = calculateSingleDelivery(delPallets, delKg, zone);
+    for (const bucket of deliveryBuckets) {
+      if (bucket.length === 0) continue;
+      const delivery = calculateSingleDelivery(bucket, zone);
       if (!delivery) {
         return { success: false, error: "PRICE_NOT_FOUND", message: "Eroare la calcularea pretului. Contactati-ne." };
       }
       deliveries.push(delivery);
-      remainingPallets -= delPallets;
-      remainingKg -= delKg;
     }
   }
 
   const totalBasePrice = deliveries.reduce((sum, d) => sum + d.basePrice, 0);
   const dafAmount = totalBasePrice * cfg.DAF_PERCENT;
-  const advAmount = cfg.ADV_COST * numDeliveries;
+  const advAmount = cfg.ADV_COST * deliveries.length;
   const subtotal = totalBasePrice + dafAmount + advAmount;
   const tvaAmount = subtotal * cfg.TVA_PERCENT;
   const totalPrice = subtotal + tvaAmount;
@@ -255,7 +289,7 @@ function calculateShipping(materialGroupsOrSqm, postalCode, config = {}) {
     success: true, totalSqm: round2(totalSqm), postalCode, zone,
     totalKg: round2(totalKg), totalPallets,
     materialGroups: groupDetails,
-    numDeliveries, deliveries, totalBasePrice: round2(totalBasePrice),
+    numDeliveries: deliveries.length, deliveries, totalBasePrice: round2(totalBasePrice),
     dafPercent: cfg.DAF_PERCENT * 100, dafAmount: round2(dafAmount),
     advAmount: round2(advAmount), subtotal: round2(subtotal),
     tvaAmount: round2(tvaAmount), totalPrice: round2(totalPrice),
