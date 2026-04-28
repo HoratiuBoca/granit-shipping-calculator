@@ -274,6 +274,17 @@ app.post("/api/shipping-rates", verifyShopifyHmac, async (req, res) => {
 
     console.log(`🛒 Cart: ${cartType} | ${stoneItems.length} piatră, ${maintenanceItems.length} întreținere | postal: ${postalCode}`);
 
+    // ── Dacă nu avem cod poștal și e piatră → mesaj informativ ──
+    if (cartType !== "maintenance_only" && (!postalCode || postalCode.trim() === "")) {
+      return res.json({ rates: [{
+        service_name: "Completați adresa pentru a primi costul de livrare",
+        description: "Introduceți codul poștal complet pentru a calcula transportul",
+        service_code: "RABEN_NEED_POSTAL",
+        currency: "RON",
+        total_price: 0
+      }] });
+    }
+
     // ── SCENARIUL 1: Doar produse de întreținere → FAN Courier ──
     if (cartType === "maintenance_only") {
       const fanResult = await calculateMaintenanceShipping(maintenanceItems, destination);
