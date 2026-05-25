@@ -1,33 +1,35 @@
 /**
- * Granit Online — Modul Calcul Cost Livrare Raben v5
- * Suport greutăți variabile per produs (30, 60, 80 kg/m²)
- * Paleți calculați separat per grup de greutate
- * Fiecare palet prețuit la propria greutate reală
- *
- * LOGICA:
- * 1. Produsele se grupează per greutate (kg/m²)
- * 2. Pentru fiecare grup: m² × kg/m² = kg → paleți (la 1200 kg/palet)
- * 3. Se calculează greutatea REALĂ a fiecărui palet individual
- * 4. Paleții se grupează per interval de greutate
- * 5. Se caută prețul în tabelul Raben per grupă (cu discount de volum)
- * 6. Peste 5.000 kg total → se împarte în livrări separate de max 5t
- */
+* Granit Online — Modul Calcul Cost Livrare Raben v6
+* Suport greutăți variabile per produs (30, 60, 80 kg/m²)
+* Paleți calculați separat per grup de greutate
+* Fiecare palet prețuit la propria greutate reală
+*
+* v6: Suport lookup zonă după JUDEȚ (province) — nu mai depinde de cod poștal
+*
+* LOGICA:
+* 1. Produsele se grupează per greutate (kg/m²)
+* 2. Pentru fiecare grup: m² × kg/m² = kg → paleți (la 1200 kg/palet)
+* 3. Se calculează greutatea REALĂ a fiecărui palet individual
+* 4. Paleții se grupează per interval de greutate
+* 5. Se caută prețul în tabelul Raben per grupă (cu discount de volum)
+* 6. Peste 5.000 kg total → se împarte în livrări separate de max 5t
+*/
 
 // ============================================================
 // PARAMETRI EDITABILI
-// ===========================================================
+// ============================================================
 const CONFIG = {
-      DAF_PERCENT: 0.40,
+  DAF_PERCENT: 0.40,
   ADV_COST: 10,
-      TVA_PERCENT: 0.21,
-  SQM_PER_PALLET: 40,        // doar ca fallback
-  KG_PER_SQM: 30,            // doar ca fallback (default)
-  MAX_KG_PER_PALLET: 1200,   // limită greutate per palet
+  TVA_PERCENT: 0.21,
+  SQM_PER_PALLET: 40,       // doar ca fallback
+  KG_PER_SQM: 30,           // doar ca fallback (default)
+  MAX_KG_PER_PALLET: 1200,  // limită greutate per palet
   MAX_KG_PER_DELIVERY: 5000,
 };
 
 // ============================================================
-// MAPARE COD POȘTAL → ZONĂ
+// MAPARE COD POȘTAL → ZONĂ (păstrată ca fallback)
 // ============================================================
 const POSTAL_TO_ZONE = {
   "41": 1, "40": 2,
@@ -38,10 +40,203 @@ const POSTAL_TO_ZONE = {
   "33": 7, "50": 7, "52": 7, "53": 7,
   "01": 8, "02": 8, "03": 8, "04": 8, "05": 8, "06": 8, "07": 8, "08": 8, "20": 8, "24": 8,
   "92": 9, "91": 9, "80": 9, "81": 9, "10": 9,
-"13": 10, "14": 10, "21": 10, "61": 10, "12": 10, "23": 10,
+  "13": 10, "14": 10, "21": 10, "61": 10, "12": 10, "23": 10,
   "11": 11, "22": 11, "60": 11, "62": 11,
   "70": 12, "82": 12, "90": 12,
   "73": 13, "71": 14, "72": 15,
+};
+
+// ============================================================
+// MAPARE JUDEȚ → ZONĂ (NOU — bazat pe coduri poștale Wikipedia)
+// ============================================================
+// Mapare: prefix cod poștal → județ (Wikipedia) → zonă (POSTAL_TO_ZONE)
+//
+// Zone derivate:
+//   prefix 41 = Bihor       → zona 1
+//   prefix 40 = Cluj        → zona 2
+//   prefix 30 = Timiș       → zona 3
+//   prefix 31 = Arad        → zona 3
+//   prefix 45 = Sălaj       → zona 4
+//   prefix 42 = Bistrița-N  → zona 4
+//   prefix 54 = Mureș       → zona 4
+//   prefix 55 = Sibiu       → zona 4
+//   prefix 43 = Maramureș   → zona 5
+//   prefix 32 = Caraș-Sev   → zona 6
+//   prefix 44 = Satu Mare   → zona 6
+//   prefix 51 = Alba        → zona 6
+//   prefix 33 = Hunedoara   → zona 7
+//   prefix 50 = Brașov      → zona 7
+//   prefix 52 = Covasna     → zona 7
+//   prefix 53 = Harghita    → zona 7
+//   prefix 01-06 = București → zona 8
+//   prefix 07 = Ilfov       → zona 8
+//   prefix 08 = Giurgiu     → zona 8
+//   prefix 20 = Dolj        → zona 8
+//   prefix 24 = Vâlcea      → zona 8
+//   prefix 10 = Prahova     → zona 9
+//   prefix 80 = Galați      → zona 9
+//   prefix 81 = Brăila      → zona 9
+//   prefix 91 = Călărași    → zona 9
+//   prefix 92 = Ialomița   → zona 9
+//   prefix 13 = Dâmbovița  → zona 10
+//   prefix 14 = Teleorman   → zona 10
+//   prefix 21 = Gorj        → zona 10
+//   prefix 23 = Olt         → zona 10
+//   prefix 12 = Buzău       → zona 10
+//   prefix 61 = Neamț       → zona 10
+//   prefix 11 = Argeș       → zona 11
+//   prefix 22 = Mehedinți  → zona 11
+//   prefix 60 = Bacău       → zona 11
+//   prefix 62 = Vrancea     → zona 11
+//   prefix 70 = Iași        → zona 12
+//   prefix 82 = Tulcea      → zona 12
+//   prefix 90 = Constanța  → zona 12
+//   prefix 73 = Vaslui      → zona 13
+//   prefix 71 = Botoșani   → zona 14
+//   prefix 72 = Suceava     → zona 15
+
+const COUNTY_TO_ZONE = {
+  // Zona 1
+  "Bihor": 1,
+
+  // Zona 2
+  "Cluj": 2,
+
+  // Zona 3
+  "Timiș": 3,
+  "Arad": 3,
+
+  // Zona 4
+  "Sălaj": 4,
+  "Bistrița-Năsăud": 4,
+  "Mureș": 4,
+  "Sibiu": 4,
+
+  // Zona 5
+  "Maramureș": 5,
+
+  // Zona 6
+  "Caraș-Severin": 6,
+  "Satu Mare": 6,
+  "Alba": 6,
+
+  // Zona 7
+  "Hunedoara": 7,
+  "Brașov": 7,
+  "Covasna": 7,
+  "Harghita": 7,
+
+  // Zona 8
+  "București": 8,
+  "Ilfov": 8,
+  "Giurgiu": 8,
+  "Dolj": 8,
+  "Vâlcea": 8,
+
+  // Zona 9
+  "Prahova": 9,
+  "Galați": 9,
+  "Brăila": 9,
+  "Călărași": 9,
+  "Ialomița": 9,
+
+  // Zona 10
+  "Dâmbovița": 10,
+  "Teleorman": 10,
+  "Gorj": 10,
+  "Olt": 10,
+  "Buzău": 10,
+  "Neamț": 10,
+
+  // Zona 11
+  "Argeș": 11,
+  "Mehedinți": 11,
+  "Bacău": 11,
+  "Vrancea": 11,
+
+  // Zona 12
+  "Iași": 12,
+  "Tulcea": 12,
+  "Constanța": 12,
+
+  // Zona 13
+  "Vaslui": 13,
+
+  // Zona 14
+  "Botoșani": 14,
+
+  // Zona 15
+  "Suceava": 15,
+};
+
+// Variante fără diacritice (Shopify poate trimite fără diacritice)
+const COUNTY_ALIASES = {
+  "Timis": "Timiș",
+  "Salaj": "Sălaj",
+  "Bistrita-Nasaud": "Bistrița-Năsăud",
+  "Bistrita Nasaud": "Bistrița-Năsăud",
+  "Mures": "Mureș",
+  "Maramures": "Maramureș",
+  "Caras-Severin": "Caraș-Severin",
+  "Caras Severin": "Caraș-Severin",
+  "Brasov": "Brașov",
+  "Bucuresti": "București",
+  "Valcea": "Vâlcea",
+  "Galati": "Galați",
+  "Braila": "Brăila",
+  "Calarasi": "Călărași",
+  "Ialomita": "Ialomița",
+  "Dambovita": "Dâmbovița",
+  "Neamt": "Neamț",
+  "Arges": "Argeș",
+  "Mehedinti": "Mehedinți",
+  "Bacau": "Bacău",
+  "Iasi": "Iași",
+  "Constanta": "Constanța",
+  "Botosani": "Botoșani",
+  // Shopify province codes (ISO 3166-2:RO)
+  "AB": "Alba",
+  "AR": "Arad",
+  "AG": "Argeș",
+  "BC": "Bacău",
+  "BH": "Bihor",
+  "BN": "Bistrița-Năsăud",
+  "BT": "Botoșani",
+  "BV": "Brașov",
+  "BR": "Brăila",
+  "B": "București",
+  "BZ": "Buzău",
+  "CS": "Caraș-Severin",
+  "CL": "Călărași",
+  "CJ": "Cluj",
+  "CT": "Constanța",
+  "CV": "Covasna",
+  "DB": "Dâmbovița",
+  "DJ": "Dolj",
+  "GL": "Galați",
+  "GR": "Giurgiu",
+  "GJ": "Gorj",
+  "HR": "Harghita",
+  "HD": "Hunedoara",
+  "IL": "Ialomița",
+  "IS": "Iași",
+  "IF": "Ilfov",
+  "MM": "Maramureș",
+  "MH": "Mehedinți",
+  "MS": "Mureș",
+  "NT": "Neamț",
+  "OT": "Olt",
+  "PH": "Prahova",
+  "SM": "Satu Mare",
+  "SJ": "Sălaj",
+  "SB": "Sibiu",
+  "SV": "Suceava",
+  "TR": "Teleorman",
+  "TM": "Timiș",
+  "TL": "Tulcea",
+  "VS": "Vaslui",
+  "VL": "Vâlcea",
+  "VN": "Vrancea",
 };
 
 // ============================================================
@@ -107,6 +302,51 @@ const PRICES = {
 // FUNCȚII DE CALCUL
 // ============================================================
 
+/**
+ * Normalizează numele județului — scoate diacritice, trim, title case
+ */
+function normalizeCounty(county) {
+  if (!county || typeof county !== 'string') return null;
+  const trimmed = county.trim();
+  if (!trimmed) return null;
+
+  // Mai întâi verificăm dacă e un alias direct (cod ISO sau variantă fără diacritice)
+  if (COUNTY_ALIASES[trimmed]) return COUNTY_ALIASES[trimmed];
+
+  // Verificăm direct în COUNTY_TO_ZONE (cu diacritice corecte)
+  if (COUNTY_TO_ZONE[trimmed] !== undefined) return trimmed;
+
+  // Încercăm case-insensitive match
+  const lowerInput = trimmed.toLowerCase();
+  for (const [alias, canonical] of Object.entries(COUNTY_ALIASES)) {
+    if (alias.toLowerCase() === lowerInput) return canonical;
+  }
+  for (const countyName of Object.keys(COUNTY_TO_ZONE)) {
+    if (countyName.toLowerCase() === lowerInput) return countyName;
+  }
+
+  // Ultimul resort: normalizăm diacriticele și comparăm
+  const normalize = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const normalizedInput = normalize(trimmed);
+  for (const countyName of Object.keys(COUNTY_TO_ZONE)) {
+    if (normalize(countyName) === normalizedInput) return countyName;
+  }
+
+  return null;
+}
+
+/**
+ * Obține zona Raben din numele județului
+ */
+function getZoneByCounty(county) {
+  const normalized = normalizeCounty(county);
+  if (!normalized) return null;
+  return COUNTY_TO_ZONE[normalized] || null;
+}
+
+/**
+ * Obține zona Raben din codul poștal (fallback — metoda veche)
+ */
 function getZone(postalCode) {
   if (!postalCode || postalCode.length < 2) return null;
   return POSTAL_TO_ZONE[postalCode.substring(0, 2)] || null;
@@ -196,15 +436,14 @@ function calculateSingleDelivery(palletWeights, zone) {
 /**
  * Calculare transport cu greutăți variabile per produs
  *
- * @param {Array} materialGroups - array de {sqm, kgPerSqm} grupate per greutate
- *   ex: [{sqm: 60, kgPerSqm: 30}, {sqm: 20, kgPerSqm: 60}]
- * @param {string} postalCode - codul poștal
+ * @param {Array} materialGroups - array de {sqm, kgPerSqm}
+ * @param {string} countyOrPostal - numele județului SAU codul poștal (backward-compatible)
  * @param {object} config - override config (opțional)
  *
- * Rămâne backward-compatible: dacă se apelează cu (totalSqm, postalCode)
- * funcționează ca înainte cu greutatea default din CONFIG
+ * v6: Acceptă județ ca prim parametru de locație.
+ *     Dacă arată ca un cod poștal (6 cifre sau 2+ cifre), folosește POSTAL_TO_ZONE ca fallback.
  */
-function calculateShipping(materialGroupsOrSqm, postalCode, config = {}) {
+function calculateShipping(materialGroupsOrSqm, countyOrPostal, config = {}) {
   const cfg = { ...CONFIG, ...config };
 
   // Backward compatibility: dacă primul arg e număr, îl convertim
@@ -221,9 +460,31 @@ function calculateShipping(materialGroupsOrSqm, postalCode, config = {}) {
     return { success: false, error: "INVALID_QUANTITY", message: "Cantitatea trebuie sa fie mai mare decat 0." };
   }
 
-  const zone = getZone(postalCode);
+  // Încercăm să găsim zona: mai întâi ca județ, apoi ca cod poștal
+  let zone = null;
+  let lookupMethod = null;
+  const input = (countyOrPostal || "").trim();
+
+  // Încercăm ca județ mai întâi
+  zone = getZoneByCounty(input);
+  if (zone) {
+    lookupMethod = "county";
+  }
+
+  // Fallback la cod poștal
   if (!zone) {
-    return { success: false, error: "UNKNOWN_ZONE", message: "Nu putem calcula automat costul de livrare pentru acest cod postal. Contactati-ne." };
+    zone = getZone(input);
+    if (zone) {
+      lookupMethod = "postal";
+    }
+  }
+
+  if (!zone) {
+    return {
+      success: false,
+      error: "UNKNOWN_ZONE",
+      message: "Nu putem calcula automat costul de livrare pentru aceasta zona. Contactati-ne."
+    };
   }
 
   // Calculează paleți per grup de material (separat!)
@@ -245,21 +506,17 @@ function calculateShipping(materialGroupsOrSqm, postalCode, config = {}) {
   const deliveries = [];
 
   if (numDeliveries === 1) {
-    // O singură livrare — toate greutățile paleților
     const delivery = calculateSingleDelivery(allPalletWeights, zone);
     if (!delivery) {
       return { success: false, error: "PRICE_NOT_FOUND", message: "Eroare la calcularea pretului. Contactati-ne." };
     }
     deliveries.push(delivery);
   } else {
-    // Împărțim paleții pe livrări, încercând să echilibrăm greutatea
-    // Sortăm paleții descrescător ca să distribuim uniform
     const sortedWeights = [...allPalletWeights].sort((a, b) => b - a);
     const deliveryBuckets = Array.from({ length: numDeliveries }, () => []);
     const deliveryKg = new Array(numDeliveries).fill(0);
 
     for (const weight of sortedWeights) {
-      // Adăugăm paletul la livrarea cu cea mai mică greutate totală
       let minIdx = 0;
       for (let i = 1; i < numDeliveries; i++) {
         if (deliveryKg[i] < deliveryKg[minIdx]) minIdx = i;
@@ -286,7 +543,11 @@ function calculateShipping(materialGroupsOrSqm, postalCode, config = {}) {
   const totalPrice = subtotal + tvaAmount;
 
   return {
-    success: true, totalSqm: round2(totalSqm), postalCode, zone,
+    success: true, totalSqm: round2(totalSqm),
+    county: lookupMethod === "county" ? input : null,
+    postalCode: lookupMethod === "postal" ? input : null,
+    lookupMethod,
+    zone,
     totalKg: round2(totalKg), totalPallets,
     materialGroups: groupDetails,
     numDeliveries: deliveries.length, deliveries, totalBasePrice: round2(totalBasePrice),
@@ -299,4 +560,18 @@ function calculateShipping(materialGroupsOrSqm, postalCode, config = {}) {
 
 function round2(num) { return Math.round(num * 100) / 100; }
 
-module.exports = { calculateShipping, calculatePalletsForGroup, calculateSingleDelivery, getZone, getWeightRange, lookupPrice, CONFIG, POSTAL_TO_ZONE, PRICES };
+module.exports = {
+  calculateShipping,
+  calculatePalletsForGroup,
+  calculateSingleDelivery,
+  getZone,
+  getZoneByCounty,
+  normalizeCounty,
+  getWeightRange,
+  lookupPrice,
+  CONFIG,
+  POSTAL_TO_ZONE,
+  COUNTY_TO_ZONE,
+  COUNTY_ALIASES,
+  PRICES,
+};
