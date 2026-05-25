@@ -1,6 +1,9 @@
 /**
- * Granit Online — Shopify Carrier Service API v4
+ * Granit Online — Shopify Carrier Service API v5
  * Suport produse piatră (Raben) + produse întreținere (FAN Courier)
+ *
+ * v5: Lookup zonă Raben după JUDEȚ (province) — nu mai depinde de cod poștal
+ *     Shopify trimite județul obligatoriu; codul poștal e opțional
  *
  * LOGICA COȘ:
  * 1. Doar piatră (fără INT-) → Raben Logistics (existent)
@@ -13,22 +16,22 @@
 const express = require("express");
 const crypto = require("crypto");
 const https = require("https");
-const { calculateShipping, CONFIG } = require("./shipping-calculator");
+const { calculateShipping, getZoneByCounty, normalizeCounty, CONFIG } = require("./shipping-calculator");
 const { calculateMaintenanceShipping, FAN_CONFIG } = require("./fan-courier");
 
 const app = express();
 app.use(express.json());
 
 // Override din environment
-if (process.env.DAF_PERCENT)    CONFIG.DAF_PERCENT = parseFloat(process.env.DAF_PERCENT);
-if (process.env.ADV_COST)       CONFIG.ADV_COST = parseFloat(process.env.ADV_COST);
+if (process.env.DAF_PERCENT) CONFIG.DAF_PERCENT = parseFloat(process.env.DAF_PERCENT);
+if (process.env.ADV_COST) CONFIG.ADV_COST = parseFloat(process.env.ADV_COST);
 if (process.env.SQM_PER_PALLET) CONFIG.SQM_PER_PALLET = parseFloat(process.env.SQM_PER_PALLET);
-if (process.env.KG_PER_SQM)     CONFIG.KG_PER_SQM = parseFloat(process.env.KG_PER_SQM);
+if (process.env.KG_PER_SQM) CONFIG.KG_PER_SQM = parseFloat(process.env.KG_PER_SQM);
 
-const SHOPIFY_SECRET     = process.env.SHOPIFY_SECRET || "";
-const SHOPIFY_API_KEY    = process.env.SHOPIFY_API_KEY || "";
+const SHOPIFY_SECRET = process.env.SHOPIFY_SECRET || "";
+const SHOPIFY_API_KEY = process.env.SHOPIFY_API_KEY || "";
 const SHOPIFY_API_SECRET = process.env.SHOPIFY_API_SECRET || "";
-const APP_URL            = process.env.APP_URL || "";
+const APP_URL = process.env.APP_URL || "";
 
 // Prefix SKU pentru produse de întreținere
 const MAINTENANCE_SKU_PREFIX = process.env.MAINTENANCE_SKU_PREFIX || "INT-";
@@ -40,7 +43,7 @@ let shopTokens = {};
 function verifyShopifyHmac(req, res, next) {
   if (!SHOPIFY_SECRET) return next();
   const hmac = req.get("X-Shopify-Hmac-Sha256");
-  if (!hmac) return next();  // Allow requests without HMAC for testing
+  if (!hmac) return next(); // Allow requests without HMAC for testing
   const hash = crypto.createHmac("sha256", SHOPIFY_SECRET).update(JSON.stringify(req.body), "utf8").digest("base64");
   if (hash !== hmac) return res.status(401).json({ error: "Invalid HMAC" });
   next();
@@ -156,7 +159,7 @@ app.get("/auth/callback", async (req, res) => {
       return res.status(400).send("Missing code or shop parameter");
     }
     if (!verifyOAuthHmac(req.query)) {
-      console.log("⚠ï¸ HMAC verification failed, but continuing...");
+      console.log("⚠️ HMAC verification failed, but continuing...");
     }
 
     const postData = JSON.stringify({
@@ -196,11 +199,11 @@ app.get("/auth/callback", async (req, res) => {
         <p>Callback: ${csResult.data.carrier_service?.callback_url}</p>
         <p><a href="https://admin.shopify.com/store/${shop.replace('.myshopify.com', '')}/settings/shipping">→ Mergi la Settings &gt; Shipping</a></p>`;
     } else if (csResult.status === 422) {
-      message = `<h2>⚠ï¸ Carrier Service există deja</h2>
+      message = `<h2>⚠️ Carrier Service există deja</h2>
         <p>App-ul a fost reinstalat. Carrier Service era deja înregistrat.</p>
         <p>Detalii: ${JSON.stringify(csResult.data)}</p>`;
     } else {
-      message = `<h2>⚠ï¸ App instalată, dar Carrier Service nu s-a putut înregistra</h2>
+      message = `<h2>⚠️ App instalată, dar Carrier Service nu s-a putut înregistra</h2>
         <p>Status: ${csResult.status}</p><p>Răspuns: ${JSON.stringify(csResult.data)}</p>
         <p>Token salvat — poți reîncerca la /api/admin/register-carrier</p>`;
     }
@@ -263,8 +266,9 @@ app.post("/api/shipping-rates", verifyShopifyHmac, async (req, res) => {
     const { rate } = req.body;
     if (!rate) return res.status(400).json({ rates: [] });
 
-    const postalCode = rate.destination?.postal_code || "";
     const destination = rate.destination || {};
+    const province = destination.province || "";    // Județ (obligatoriu pe Shopify)
+    const postalCode = destination.postal_code || ""; // Cod poștal (opțional)
     const items = rate.items || [];
 
     if (items.length === 0) return res.json({ rates: [] });
@@ -272,17 +276,24 @@ app.post("/api/shipping-rates", verifyShopifyHmac, async (req, res) => {
     // ── Clasificăm itemii ──
     const { stoneItems, maintenanceItems, cartType } = classifyCartItems(items);
 
-    console.log(`🛒 Cart: ${cartType} | ${stoneItems.length} piatră, ${maintenanceItems.length} întreținere | postal: ${postalCode}`);
+    console.log(`🛒 Cart: ${cartType} | ${stoneItems.length} piatră, ${maintenanceItems.length} întreținere | județ: ${province} | postal: ${postalCode}`);
 
-    // ── Dacă nu avem cod poștal și e piatră → mesaj informativ ──
-    if (cartType !== "maintenance_only" && (!postalCode || postalCode.trim() === "")) {
-      return res.json({ rates: [{
-        service_name: "Completați adresa pentru a primi costul de livrare",
-        description: "Introduceți codul poștal complet pentru a calcula transportul",
-        service_code: "RABEN_NEED_POSTAL",
-        currency: "RON",
-        total_price: 0
-      }] });
+    // ── Dacă e piatră, avem nevoie de județ (province) pentru zona Raben ──
+    if (cartType !== "maintenance_only") {
+      // Încercăm să determinăm zona: mai întâi din județ, apoi din cod poștal
+      const zoneFromCounty = province ? getZoneByCounty(province) : null;
+      const zoneFromPostal = postalCode ? require("./shipping-calculator").getZone(postalCode) : null;
+
+      if (!zoneFromCounty && !zoneFromPostal) {
+        // Nici județ nici cod poștal valid — cerem completarea adresei
+        return res.json({ rates: [{
+          service_name: "Completați județul pentru a primi costul de livrare",
+          description: "Selectați județul din formularul de adresă pentru a calcula transportul",
+          service_code: "RABEN_NEED_PROVINCE",
+          currency: "RON",
+          total_price: 0
+        }] });
+      }
     }
 
     // ── SCENARIUL 1: Doar produse de întreținere → FAN Courier ──
@@ -314,8 +325,7 @@ app.post("/api/shipping-rates", verifyShopifyHmac, async (req, res) => {
     // ── SCENARIUL 2 & 3: Piatră (cu sau fără întreținere) → Raben ──
     // La coș mixt, întreținerea merge GRATIS cu paletul de piatră
 
-    // Grupăm itemii de PIATRă per greutate (grams = greutatea per unitate în grame)
-    // quantity = nr de m² comandate per item
+    // Grupăm itemii de PIATRĂ per greutate
     const weightGroups = {};
     for (const item of stoneItems) {
       const sqm = item.quantity;
@@ -332,9 +342,11 @@ app.post("/api/shipping-rates", verifyShopifyHmac, async (req, res) => {
 
     if (totalSqm <= 0) return res.json({ rates: [] });
 
-    console.log(`📦 Raben: ${totalSqm} m², postal: ${postalCode}, groups:`, JSON.stringify(materialGroups));
+    // Folosim județul ca parametru principal, codul poștal ca fallback
+    const locationParam = province || postalCode;
+    console.log(`📦 Raben: ${totalSqm} m², lookup: ${locationParam}, groups:`, JSON.stringify(materialGroups));
 
-    const result = calculateShipping(materialGroups, postalCode);
+    const result = calculateShipping(materialGroups, locationParam);
 
     if (!result.success) {
       return res.json({ rates: [{
@@ -377,11 +389,21 @@ app.post("/api/shipping-rates", verifyShopifyHmac, async (req, res) => {
 
 // ============================================================
 // GET /api/calculate — Calculator standalone (testare)
+// Acum acceptă și ?county=Cluj pe lângă ?postal=010045
 // ============================================================
 app.get("/api/calculate", (req, res) => {
+  const county = req.query.county || "";
   const postal = req.query.postal || "";
-  if (!postal) return res.status(400).json({
-    error: "Utilizare: /api/calculate?sqm=65&postal=010045 sau /api/calculate?groups=60:30,20:60&postal=010045"
+  const locationParam = county || postal;
+
+  if (!locationParam) return res.status(400).json({
+    error: "Utilizare: /api/calculate?sqm=65&county=Cluj sau /api/calculate?sqm=65&postal=010045",
+    examples: [
+      "/api/calculate?sqm=60&county=Timis",
+      "/api/calculate?sqm=60&county=Brasov",
+      "/api/calculate?groups=60:30,20:60&county=Cluj",
+      "/api/calculate?sqm=65&postal=010045 (fallback cod poștal)",
+    ]
   });
 
   if (req.query.groups) {
@@ -389,13 +411,15 @@ app.get("/api/calculate", (req, res) => {
       const [sqm, kgPerSqm] = g.split(":").map(Number);
       return { sqm, kgPerSqm: kgPerSqm || CONFIG.KG_PER_SQM };
     });
-    return res.json(calculateShipping(materialGroups, postal));
+    return res.json(calculateShipping(materialGroups, locationParam));
   }
 
   const sqm = parseFloat(req.query.sqm);
   const kgPerSqm = parseFloat(req.query.kg) || CONFIG.KG_PER_SQM;
-  if (!sqm) return res.status(400).json({ error: "Utilizare: /api/calculate?sqm=65&postal=010045&kg=60" });
-  return res.json(calculateShipping([{ sqm, kgPerSqm }], postal));
+  if (!sqm) return res.status(400).json({
+    error: "Utilizare: /api/calculate?sqm=65&county=Cluj&kg=60"
+  });
+  return res.json(calculateShipping([{ sqm, kgPerSqm }], locationParam));
 });
 
 // ============================================================
@@ -407,7 +431,6 @@ app.get("/api/calculate-fan", async (req, res) => {
   const city = req.query.city || "Bucuresti";
   const parcels = parseInt(req.query.parcels) || 1;
 
-  // Simulăm items din Shopify
   const fakeItems = [{
     sku: "INT-TEST",
     grams: weight * 1000,
@@ -421,6 +444,24 @@ app.get("/api/calculate-fan", async (req, res) => {
 });
 
 // ============================================================
+// GET /api/zones — Listare toate județele și zonele lor (util pt debug)
+// ============================================================
+app.get("/api/zones", (req, res) => {
+  const { COUNTY_TO_ZONE } = require("./shipping-calculator");
+  const zones = {};
+  for (const [county, zone] of Object.entries(COUNTY_TO_ZONE)) {
+    if (!zones[zone]) zones[zone] = [];
+    zones[zone].push(county);
+  }
+  res.json({
+    totalCounties: Object.keys(COUNTY_TO_ZONE).length,
+    totalZones: Object.keys(zones).length,
+    countyToZone: COUNTY_TO_ZONE,
+    zoneToCounties: zones,
+  });
+});
+
+// ============================================================
 // POST /api/admin/update-config — Actualizare DAF/ADV
 // ============================================================
 app.post("/api/admin/update-config", (req, res) => {
@@ -428,7 +469,7 @@ app.post("/api/admin/update-config", (req, res) => {
   if (req.body.api_key !== adminKey) return res.status(401).json({ error: "Unauthorized" });
 
   if (req.body.daf_percent !== undefined) CONFIG.DAF_PERCENT = parseFloat(req.body.daf_percent);
-  if (req.body.adv_cost !== undefined)    CONFIG.ADV_COST = parseFloat(req.body.adv_cost);
+  if (req.body.adv_cost !== undefined) CONFIG.ADV_COST = parseFloat(req.body.adv_cost);
 
   return res.json({ success: true, config: { DAF_PERCENT: CONFIG.DAF_PERCENT, ADV_COST: CONFIG.ADV_COST } });
 });
@@ -437,12 +478,13 @@ app.post("/api/admin/update-config", (req, res) => {
 app.get("/", (req, res) => {
   res.json({
     status: "OK",
-    service: "Granit Online Shipping v4",
+    service: "Granit Online Shipping v5",
     features: {
       stone: "Raben Logistics (palet/m²)",
       maintenance: "FAN Courier (colete individuale)",
       mixed: "Raben only (întreținere gratis cu paletul)",
       skuPrefix: MAINTENANCE_SKU_PREFIX,
+      zoneLookup: "județ (province) — nu mai depinde de cod poștal",
     },
     config: {
       DAF: `${CONFIG.DAF_PERCENT * 100}%`,
@@ -454,6 +496,11 @@ app.get("/", (req, res) => {
       fallbackGrid: FAN_CONFIG.FALLBACK_GRID,
     },
     installedShops: Object.keys(shopTokens),
+    endpoints: {
+      calculate: "/api/calculate?sqm=60&county=Timis",
+      zones: "/api/zones",
+      calculateFan: "/api/calculate-fan?weight=2&county=Bucuresti&city=Bucuresti",
+    }
   });
 });
 
@@ -469,12 +516,14 @@ function addBusinessDays(date, days) {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚛 Granit Online Shipping v4 on port ${PORT}`);
+  console.log(`🚛 Granit Online Shipping v5 on port ${PORT}`);
   console.log(`  Raben: DAF ${CONFIG.DAF_PERCENT * 100}% | ADV ${CONFIG.ADV_COST} RON | Max ${CONFIG.MAX_KG_PER_DELIVERY} kg`);
+  console.log(`  Lookup: JUDEȚ (province) → zonă Raben (cod poștal ca fallback)`);
   console.log(`  FAN Courier: ${FAN_CONFIG.CLIENT_ID ? "API activ (ID: " + FAN_CONFIG.CLIENT_ID + ")" : "Fallback grilă statică"}`);
   console.log(`  SKU prefix întreținere: "${MAINTENANCE_SKU_PREFIX}"`);
-  console.log(`  Test Raben: http://localhost:${PORT}/api/calculate?sqm=60&postal=010045`);
-  console.log(`  Test FAN:   http://localhost:${PORT}/api/calculate-fan?weight=2&county=Bucuresti&city=Bucuresti`);
+  console.log(`  Test Raben: http://localhost:${PORT}/api/calculate?sqm=60&county=Timis`);
+  console.log(`  Test FAN: http://localhost:${PORT}/api/calculate-fan?weight=2&county=Bucuresti&city=Bucuresti`);
+  console.log(`  Vezi zone: http://localhost:${PORT}/api/zones`);
 });
 
 module.exports = app;
