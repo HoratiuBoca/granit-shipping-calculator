@@ -342,8 +342,10 @@ app.post("/api/shipping-rates", verifyShopifyHmac, async (req, res) => {
 
     if (totalSqm <= 0) return res.json({ rates: [] });
 
-    // Folosim județul ca parametru principal, codul poștal ca fallback
-    const locationParam = province || postalCode;
+    // Folosim codul poștal ca parametru principal (consistent cu cache-ul Shopify
+    // care invalidează la schimbarea postal, nu și la schimbarea judeţului),
+    // judeţul ca fallback dacă lipseşte postal-ul
+    const locationParam = postalCode || province;
     console.log(`📦 Raben: ${totalSqm} m², lookup: ${locationParam}, groups:`, JSON.stringify(materialGroups));
 
     const result = calculateShipping(materialGroups, locationParam);
@@ -484,7 +486,7 @@ app.get("/", (req, res) => {
       maintenance: "FAN Courier (colete individuale)",
       mixed: "Raben only (întreținere gratis cu paletul)",
       skuPrefix: MAINTENANCE_SKU_PREFIX,
-      zoneLookup: "județ (province) — nu mai depinde de cod poștal",
+      zoneLookup: "cod poștal (primar) + județ (fallback) — consistent cu cache-ul Shopify",
     },
     config: {
       DAF: `${CONFIG.DAF_PERCENT * 100}%`,
@@ -518,7 +520,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚛 Granit Online Shipping v5 on port ${PORT}`);
   console.log(`  Raben: DAF ${CONFIG.DAF_PERCENT * 100}% | ADV ${CONFIG.ADV_COST} RON | Max ${CONFIG.MAX_KG_PER_DELIVERY} kg`);
-  console.log(`  Lookup: JUDEȚ (province) → zonă Raben (cod poștal ca fallback)`);
+  console.log(`  Lookup: COD POȘTAL → zonă Raben (județ ca fallback, consistent cu cache-ul Shopify)`);
   console.log(`  FAN Courier: ${FAN_CONFIG.CLIENT_ID ? "API activ (ID: " + FAN_CONFIG.CLIENT_ID + ")" : "Fallback grilă statică"}`);
   console.log(`  SKU prefix întreținere: "${MAINTENANCE_SKU_PREFIX}"`);
   console.log(`  Test Raben: http://localhost:${PORT}/api/calculate?sqm=60&county=Timis`);
