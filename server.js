@@ -16,7 +16,7 @@
 const express = require("express");
 const crypto = require("crypto");
 const https = require("https");
-const { calculateShipping, getZoneByCounty, normalizeCounty, CONFIG } = require("./shipping-calculator");
+const { calculateShipping, getZoneByCounty, getZone, normalizeCounty, CONFIG } = require("./shipping-calculator");
 const { calculateMaintenanceShipping, FAN_CONFIG } = require("./fan-courier");
 
 const app = express();
@@ -317,21 +317,20 @@ app.post("/api/shipping-rates", verifyShopifyHmac, async (req, res) => {
 
     console.log(`🛒 Cart: ${cartType} | ${stoneItems.length} piatră, ${maintenanceItems.length} întreținere | județ: ${province} | postal: ${postalCode}`);
 
-    // ── Dacă e piatră, avem nevoie de județ (province) pentru zona Raben ──
+    // ── Pentru piatră (Raben): POSTAL e obligatoriu ──
+    // Județul singur NU e suficient — Shopify cachează shipping rates după
+    // postal_code (nu și după province), deci fără postal: (a) cache-ul nu se
+    // invalidează la schimbarea județului, (b) Shopify deseori cade pe
+    // backup rate care subfacturează clientul.
+    // Forțăm postal: dacă lipsește sau e necunoscut, returnăm rates: [] →
+    // Shopify nu oferă nicio metodă → clientul TREBUIE să completeze postal.
+    // ATENȚIE: backup rates din Shopify Admin trebuie dezactivate manual,
+    // altfel pot încă apărea peste rates: [] gol-ul nostru.
     if (cartType !== "maintenance_only") {
-      // Încercăm să determinăm zona: mai întâi din județ, apoi din cod poștal
-      const zoneFromCounty = province ? getZoneByCounty(province) : null;
-      const zoneFromPostal = postalCode ? require("./shipping-calculator").getZone(postalCode) : null;
-
-      if (!zoneFromCounty && !zoneFromPostal) {
-        // Nici județ nici cod poștal valid — cerem completarea adresei
-        return res.json({ rates: [{
-          service_name: "Completați județul pentru a primi costul de livrare",
-          description: "Selectați județul din formularul de adresă pentru a calcula transportul",
-          service_code: "RABEN_NEED_PROVINCE",
-          currency: "RON",
-          total_price: 0
-        }] });
+      const postalZone = postalCode ? getZone(postalCode) : null;
+      if (!postalZone) {
+        console.log(`⚠️ Postal lipsă/necunoscut — postal="${postalCode}", province="${province}". Return rates: []`);
+        return res.json({ rates: [] });
       }
     }
 
@@ -381,10 +380,9 @@ app.post("/api/shipping-rates", verifyShopifyHmac, async (req, res) => {
 
     if (totalSqm <= 0) return res.json({ rates: [] });
 
-    // Folosim codul poștal ca parametru principal (consistent cu cache-ul Shopify
-    // care invalidează la schimbarea postal, nu și la schimbarea judeţului),
-    // judeţul ca fallback dacă lipseşte postal-ul
-    const locationParam = postalCode || province;
+    // Folosim POSTAL EXCLUSIV — judeţul nu mai e folosit ca fallback.
+    // (Verificarea de mai sus garantează că postalCode e prezent și valid aici.)
+    const locationParam = postalCode;
     console.log(`📦 Raben: ${totalSqm} m², lookup: ${locationParam}, groups:`, JSON.stringify(materialGroups));
 
     const result = calculateShipping(materialGroups, locationParam);
@@ -525,7 +523,7 @@ app.get("/", (req, res) => {
       maintenance: "FAN Courier (colete individuale)",
       mixed: "Raben only (întreținere gratis cu paletul)",
       skuPrefix: MAINTENANCE_SKU_PREFIX,
-      zoneLookup: "cod poștal (primar) + județ (fallback) — consistent cu cache-ul Shopify",
+      zoneLookup: "cod poștal OBLIGATORIU (judeţ ignorat) — fără postal, return rates: []",
     },
     config: {
       DAF: `${CONFIG.DAF_PERCENT * 100}%`,
