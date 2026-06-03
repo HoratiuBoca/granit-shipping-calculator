@@ -322,15 +322,22 @@ app.post("/api/shipping-rates", verifyShopifyHmac, async (req, res) => {
     // postal_code (nu și după province), deci fără postal: (a) cache-ul nu se
     // invalidează la schimbarea județului, (b) Shopify deseori cade pe
     // backup rate care subfacturează clientul.
-    // Forțăm postal: dacă lipsește sau e necunoscut, returnăm rates: [] →
-    // Shopify nu oferă nicio metodă → clientul TREBUIE să completeze postal.
-    // ATENȚIE: backup rates din Shopify Admin trebuie dezactivate manual,
-    // altfel pot încă apărea peste rates: [] gol-ul nostru.
+    // Returnăm un rate-mesaj cu total_price: 0 și nume foarte clar — clientul
+    // vede „Completați codul poștal" în lista de livrări. RISC TEORETIC:
+    // clientul poate selecta acest rate și plasa comanda cu livrare 0 lei.
+    // Verifică log-urile Railway pentru POSTAL_REQUIRED_USED pentru a prinde
+    // dacă se întâmplă, plus backup rates Shopify trebuie să rămână dezactivate.
     if (cartType !== "maintenance_only") {
       const postalZone = postalCode ? getZone(postalCode) : null;
       if (!postalZone) {
-        console.log(`⚠️ Postal lipsă/necunoscut — postal="${postalCode}", province="${province}". Return rates: []`);
-        return res.json({ rates: [] });
+        console.log(`⚠️ POSTAL_REQUIRED triggered — postal="${postalCode}", province="${province}". Returnăm rate-mesaj.`);
+        return res.json({ rates: [{
+          service_name: "⚠️ Completați codul poștal pentru cost livrare",
+          description: "Costul transportului apare după ce introduceți codul poștal (6 cifre). Dacă plasați comanda fără postal, vom completa noi costul livrării ulterior.",
+          service_code: "RABEN_NEED_POSTAL",
+          currency: "RON",
+          total_price: 0
+        }] });
       }
     }
 
@@ -523,7 +530,7 @@ app.get("/", (req, res) => {
       maintenance: "FAN Courier (colete individuale)",
       mixed: "Raben only (întreținere gratis cu paletul)",
       skuPrefix: MAINTENANCE_SKU_PREFIX,
-      zoneLookup: "cod poștal OBLIGATORIU (judeţ ignorat) — fără postal, return rates: []",
+      zoneLookup: "cod poștal OBLIGATORIU (judeţ ignorat) — fără postal, rate-mesaj 'Completați codul poștal'",
     },
     config: {
       DAF: `${CONFIG.DAF_PERCENT * 100}%`,
