@@ -301,8 +301,27 @@ app.get("/api/admin/register-carrier", async (req, res) => {
 // POST /api/shipping-rates — Shopify Carrier Service API
 // ============================================================
 app.post("/api/shipping-rates", verifyShopifyHmac, async (req, res) => {
+  // Per-request tracing: short ID + start timestamp; monkey-patch res.json
+  // to add X-Duration-Ms / X-Request-Id headers and a single log line at the
+  // end of every code path. Lets us correlate Railway logs with a request,
+  // and inspect timing from the browser's DevTools Network tab.
+  const reqId = Math.random().toString(36).slice(2, 8);
+  const t0 = Date.now();
+  const origJson = res.json.bind(res);
+  res.json = (body) => {
+    const ms = Date.now() - t0;
+    try { res.set('X-Request-Id', reqId); res.set('X-Duration-Ms', String(ms)); } catch (_) {}
+    const ratesInfo = (body && Array.isArray(body.rates))
+      ? (body.rates.length === 0 ? 'rates=[]' : body.rates.map(r => `${r.service_code || '?'}=${r.total_price}`).join(','))
+      : 'no-rates-field';
+    console.log(`[${reqId}] ⇐ ${ms}ms ${ratesInfo}`);
+    return origJson(body);
+  };
+
   try {
     const { rate } = req.body;
+    const _d = rate?.destination || {};
+    console.log(`[${reqId}] ⇒ start postal="${_d.postal_code || ''}" province="${_d.province || ''}" country=${_d.country || ''} items=${rate?.items?.length || 0}`);
     if (!rate) return res.status(400).json({ rates: [] });
 
     const destination = rate.destination || {};
@@ -428,7 +447,7 @@ app.post("/api/shipping-rates", verifyShopifyHmac, async (req, res) => {
     }] });
 
   } catch (err) {
-    console.error("Eroare:", err);
+    console.error(`[${reqId}] ✗ ERROR after ${Date.now() - t0}ms:`, err && err.stack ? err.stack : err);
     return res.status(500).json({ rates: [] });
   }
 });
