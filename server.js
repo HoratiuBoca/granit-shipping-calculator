@@ -78,12 +78,56 @@ function httpsRequest(options, postData) {
   });
 }
 
-// Register Carrier Service on a shop
+// Register Carrier Service on a shop — self-healing
+// If a carrier service from this app already exists (Granit/Raben name match),
+// UPDATE its callback_url + active flag rather than failing with 422.
+// Otherwise CREATE a fresh one.
 async function registerCarrierService(shop, accessToken) {
   const callbackUrl = APP_URL
     ? `${APP_URL}/api/shipping-rates`
     : `https://${process.env.RAILWAY_PUBLIC_DOMAIN || "granit-shipping-calculator-production.up.railway.app"}/api/shipping-rates`;
 
+  console.log(`📦 Carrier Service setup on ${shop}, target callbackUrl: ${callbackUrl}`);
+
+  // List existing carrier services to decide: update vs create
+  const listResult = await httpsRequest({
+    hostname: shop,
+    path: "/admin/api/2024-01/carrier_services.json",
+    method: "GET",
+    headers: { "X-Shopify-Access-Token": accessToken }
+  });
+
+  const existingList = (listResult.data && listResult.data.carrier_services) || [];
+  console.log(`  Found ${existingList.length} existing carrier service(s) on the shop`);
+  const existing = existingList.find(
+    s => s.name && (s.name.includes("Granit") || s.name.includes("Raben"))
+  );
+
+  if (existing) {
+    console.log(`  ➜ Updating existing carrier service id=${existing.id} (current callback="${existing.callback_url}")`);
+    const updateData = JSON.stringify({
+      carrier_service: {
+        id: existing.id,
+        name: existing.name,
+        callback_url: callbackUrl,
+        active: true,
+      }
+    });
+    const result = await httpsRequest({
+      hostname: shop,
+      path: `/admin/api/2024-01/carrier_services/${existing.id}.json`,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Shopify-Access-Token": accessToken,
+        "Content-Length": Buffer.byteLength(updateData)
+      }
+    }, updateData);
+    console.log(`  Update response (${result.status}):`, JSON.stringify(result.data));
+    return result;
+  }
+
+  console.log(`  ➜ No existing carrier service for this app, creating new`);
   const postData = JSON.stringify({
     carrier_service: {
       name: "Granit Online — Livrare Calculată",
@@ -92,9 +136,6 @@ async function registerCarrierService(shop, accessToken) {
       format: "json"
     }
   });
-
-  console.log(`📦 Registering Carrier Service on ${shop}...`);
-  console.log(`  Callback URL: ${callbackUrl}`);
 
   const result = await httpsRequest({
     hostname: shop,
@@ -107,7 +148,7 @@ async function registerCarrierService(shop, accessToken) {
     }
   }, postData);
 
-  console.log(`  Response (${result.status}):`, JSON.stringify(result.data));
+  console.log(`  Create response (${result.status}):`, JSON.stringify(result.data));
   return result;
 }
 
@@ -192,16 +233,14 @@ app.get("/auth/callback", async (req, res) => {
     const csResult = await registerCarrierService(shop, accessToken);
 
     let message = "";
-    if (csResult.status === 201) {
+    if (csResult.status === 200 || csResult.status === 201) {
+      const verb = csResult.status === 201 ? "înregistrat" : "actualizat";
       message = `<h2>✅ App instalată cu succes!</h2>
-        <p>Carrier Service „Granit Online — Livrare Calculată" a fost înregistrat.</p>
+        <p>Carrier Service „Granit Online — Livrare Calculată" a fost ${verb}.</p>
         <p>ID: ${csResult.data.carrier_service?.id}</p>
-        <p>Callback: ${csResult.data.carrier_service?.callback_url}</p>
+        <p>Callback URL: <code>${csResult.data.carrier_service?.callback_url}</code></p>
+        <p>Active: <strong>${csResult.data.carrier_service?.active}</strong></p>
         <p><a href="https://admin.shopify.com/store/${shop.replace('.myshopify.com', '')}/settings/shipping">→ Mergi la Settings &gt; Shipping</a></p>`;
-    } else if (csResult.status === 422) {
-      message = `<h2>⚠️ Carrier Service există deja</h2>
-        <p>App-ul a fost reinstalat. Carrier Service era deja înregistrat.</p>
-        <p>Detalii: ${JSON.stringify(csResult.data)}</p>`;
     } else {
       message = `<h2>⚠️ App instalată, dar Carrier Service nu s-a putut înregistra</h2>
         <p>Status: ${csResult.status}</p><p>Răspuns: ${JSON.stringify(csResult.data)}</p>
