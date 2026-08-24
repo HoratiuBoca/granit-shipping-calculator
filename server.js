@@ -36,6 +36,11 @@ const APP_URL = process.env.APP_URL || "";
 // Prefix SKU pentru produse de întreținere
 const MAINTENANCE_SKU_PREFIX = process.env.MAINTENANCE_SKU_PREFIX || "INT-";
 
+// Produse cu transport GRATUIT, identificate după cuvânt-cheie în numele
+// produsului (lavoarele nu au SKU în Shopify, deci nu putem folosi prefix).
+// Acoperă automat orice produs viitor cu "lavoar" în titlu.
+const FREE_SHIPPING_NAME_KEYWORD = (process.env.FREE_SHIPPING_NAME_KEYWORD || "lavoar").toLowerCase();
+
 // In-memory token store (persists until redeploy)
 let shopTokens = {};
 
@@ -166,11 +171,15 @@ app.use((req, res, next) => {
 function classifyCartItems(items) {
   const stoneItems = [];
   const maintenanceItems = [];
+  const freeItems = [];
 
   for (const item of items) {
     const sku = (item.sku || "").toUpperCase().trim();
+    const name = (item.name || "").toLowerCase();
     if (sku.startsWith(MAINTENANCE_SKU_PREFIX.toUpperCase())) {
       maintenanceItems.push(item);
+    } else if (FREE_SHIPPING_NAME_KEYWORD && name.includes(FREE_SHIPPING_NAME_KEYWORD)) {
+      freeItems.push(item);
     } else {
       stoneItems.push(item);
     }
@@ -179,13 +188,16 @@ function classifyCartItems(items) {
   let cartType;
   if (stoneItems.length > 0 && maintenanceItems.length > 0) {
     cartType = "mixed";
+  } else if (stoneItems.length > 0) {
+    cartType = "stone_only";
   } else if (maintenanceItems.length > 0) {
     cartType = "maintenance_only";
   } else {
-    cartType = "stone_only";
+    // Doar produse cu transport gratuit (ex. lavoare)
+    cartType = "free_only";
   }
 
-  return { stoneItems, maintenanceItems, cartType };
+  return { stoneItems, maintenanceItems, freeItems, cartType };
 }
 
 // ============================================================
@@ -332,9 +344,23 @@ app.post("/api/shipping-rates", verifyShopifyHmac, async (req, res) => {
     if (items.length === 0) return res.json({ rates: [] });
 
     // ── Clasificăm itemii ──
-    const { stoneItems, maintenanceItems, cartType } = classifyCartItems(items);
+    const { stoneItems, maintenanceItems, freeItems, cartType } = classifyCartItems(items);
 
-    console.log(`🛒 Cart: ${cartType} | ${stoneItems.length} piatră, ${maintenanceItems.length} întreținere | județ: ${province} | postal: ${postalCode}`);
+    console.log(`🛒 Cart: ${cartType} | ${stoneItems.length} piatră, ${maintenanceItems.length} întreținere, ${freeItems.length} transport-gratuit | județ: ${province} | postal: ${postalCode}`);
+
+    // ── Coș DOAR cu produse cu transport gratuit (ex. lavoare) ──
+    // Nu cerem cod poștal — nu e nimic de calculat.
+    if (cartType === "free_only") {
+      return res.json({ rates: [{
+        service_name: "Transport GRATUIT",
+        description: "Livrare gratuită pentru acest produs",
+        service_code: "FREE_SHIPPING",
+        currency: "RON",
+        total_price: 0,
+        min_delivery_date: addBusinessDays(new Date(), 2).toISOString().split("T")[0],
+        max_delivery_date: addBusinessDays(new Date(), 5).toISOString().split("T")[0],
+      }] });
+    }
 
     // ── Pentru piatră (Raben): POSTAL e obligatoriu ──
     // Județul singur NU e suficient — Shopify cachează shipping rates după
@@ -377,7 +403,7 @@ app.post("/api/shipping-rates", verifyShopifyHmac, async (req, res) => {
       const priceInBani = Math.round(fanResult.totalPrice * 100);
       return res.json({ rates: [{
         service_name: "Livrare FAN Courier",
-        description: fanResult.description,
+        description: fanResult.description + (freeItems.length > 0 ? " + lavoar transport GRATUIT" : ""),
         service_code: "FAN_STANDARD",
         currency: "RON",
         total_price: priceInBani,
@@ -434,6 +460,11 @@ app.post("/api/shipping-rates", verifyShopifyHmac, async (req, res) => {
     // La coș mixt, adăugăm notă că întreținerea e inclusă gratis
     if (cartType === "mixed") {
       desc += " + produse întreținere GRATUIT";
+    }
+
+    // Lavoarele (sau alte produse cu transport gratuit) merg gratis cu livrarea
+    if (freeItems.length > 0) {
+      desc += " + lavoar transport GRATUIT";
     }
 
     return res.json({ rates: [{
@@ -549,6 +580,7 @@ app.get("/", (req, res) => {
       maintenance: "FAN Courier (colete individuale)",
       mixed: "Raben only (întreținere gratis cu paletul)",
       skuPrefix: MAINTENANCE_SKU_PREFIX,
+      freeShippingKeyword: FREE_SHIPPING_NAME_KEYWORD,
       zoneLookup: "cod poștal OBLIGATORIU (judeţ ignorat) — fără postal, rate-mesaj 'Completați codul poștal'",
     },
     config: {
