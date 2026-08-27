@@ -1,18 +1,21 @@
 /**
-* Granit Online — Modul Calcul Cost Livrare Raben v6
-* Suport greutăți variabile per produs (30, 60, 80 kg/m²)
-* Paleți calculați separat per grup de greutate
+* Granit Online — Modul Calcul Cost Livrare Raben v7
+* Suport greutăți variabile per produs (30, 50, 60, 80 kg/m²)
+* Paleți umpluți COMBINAT: materiale diferite stau pe același palet
 * Fiecare palet prețuit la propria greutate reală
 *
-* v6: Suport lookup zonă după JUDEȚ (province) — nu mai depinde de cod poștal
+* v6: Suport lookup zonă după JUDEȚ (province)
+* v7: Paletizare combinată — un palet poate conține mai multe materiale,
+*     doar greutatea totală contează (max 1200 kg/palet). Înainte, fiecare
+*     grup de greutate primea paleții lui rotunjiți separat, deci
+*     Scapițat (50 kg/m²) + Silver (30 kg/m²) sub 1200 kg ieșeau 2 paleți.
 *
 * LOGICA:
-* 1. Produsele se grupează per greutate (kg/m²)
-* 2. Pentru fiecare grup: m² × kg/m² = kg → paleți (la 1200 kg/palet)
-* 3. Se calculează greutatea REALĂ a fiecărui palet individual
-* 4. Paleții se grupează per interval de greutate
-* 5. Se caută prețul în tabelul Raben per grupă (cu discount de volum)
-* 6. Peste 5.000 kg total → se împarte în livrări separate de max 5t
+* 1. Se adună greutatea totală: Σ (m² × kg/m²) peste toate produsele
+* 2. Paleții se umplu secvențial la 1200 kg — ultimul ia restul
+* 3. Paleții se grupează per interval de greutate
+* 4. Se caută prețul în tabelul Raben per grupă (cu discount de volum)
+* 5. Peste 5.000 kg total → se împarte în livrări separate de max 5t
 */
 
 // ============================================================
@@ -487,19 +490,24 @@ function calculateShipping(materialGroupsOrSqm, countyOrPostal, config = {}) {
     };
   }
 
-  // Calculează paleți per grup de material (separat!)
-  let totalPallets = 0;
+  // v7: Paletizare COMBINATĂ — materiale diferite pot sta pe același palet.
+  // Contează doar greutatea totală; paleții se umplu secvențial la 1200 kg.
   let totalKg = 0;
   const groupDetails = [];
-  const allPalletWeights = [];
-
   for (const group of materialGroups) {
-    const result = calculatePalletsForGroup(group.sqm, group.kgPerSqm);
-    totalPallets += result.pallets;
-    totalKg += result.totalKg;
-    groupDetails.push(result);
-    allPalletWeights.push(...result.palletWeights);
+    const groupKg = group.sqm * group.kgPerSqm;
+    totalKg += groupKg;
+    groupDetails.push({ sqm: round2(group.sqm), kgPerSqm: group.kgPerSqm, totalKg: round2(groupKg) });
   }
+
+  const allPalletWeights = [];
+  let remainingKg = totalKg;
+  while (remainingKg > 1e-9) {
+    const w = Math.min(cfg.MAX_KG_PER_PALLET, remainingKg);
+    allPalletWeights.push(round2(w));
+    remainingKg -= w;
+  }
+  const totalPallets = allPalletWeights.length;
 
   // Splitting la 5 tone
   const numDeliveries = Math.ceil(totalKg / cfg.MAX_KG_PER_DELIVERY);
